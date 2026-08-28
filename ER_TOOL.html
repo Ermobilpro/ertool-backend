@@ -139,11 +139,15 @@
   .vacio{ text-align:center; padding:36px 14px; color:var(--ink-soft); }
 
   /* recibo imprimible */
-  #recibo-imprimible{ display:none; }
+  #recibo-imprimible, #hoja-imprimible{ display:none; }
   @media print{
     body *{ visibility:hidden; }
     #recibo-imprimible, #recibo-imprimible *{ visibility:visible; }
     #recibo-imprimible{ display:block; position:absolute; top:0; left:0; width:80mm; padding:6px; font-family:'Courier New',monospace; font-size:12px; }
+    #hoja-imprimible.imprimiendo, #hoja-imprimible.imprimiendo *{ visibility:visible; }
+    #hoja-imprimible.imprimiendo{ display:block; position:absolute; top:0; left:0; width:100%; padding:16px; color:#000; }
+    #hoja-imprimible table{ width:100%; border-collapse:collapse; }
+    #hoja-imprimible th, #hoja-imprimible td{ border:1px solid #999; padding:5px 8px; text-align:left; font-size:12px; color:#000; }
   }
   .recibo-preview{ font-family:'Courier New',monospace; font-size:12.5px; background:var(--panel-2); border:1px dashed var(--line); border-radius:8px; padding:12px; white-space:pre-wrap; }
 
@@ -238,6 +242,7 @@
     <div class="vista" id="vista-rutas"></div>
     <div class="vista" id="vista-clientes"></div>
     <div class="vista" id="vista-prestamos"></div>
+    <div class="vista" id="vista-cartera"></div>
     <div class="vista" id="vista-cuadre"></div>
     <div class="vista" id="vista-usuarios"></div>
     <div class="vista" id="vista-empresa"></div>
@@ -247,6 +252,7 @@
 
 <div id="modal-host"></div>
 <div id="recibo-imprimible"></div>
+<div id="hoja-imprimible"></div>
 
 <script>
 /* ======================================================================
@@ -289,7 +295,7 @@ function inicioMes(fechaStr){ return fechaStr.slice(0,7)+'-01'; }
 --------------------------------------------------------------------- */
 function defaultDB(){
   return {
-    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos', googleMapsApiKey: '' }, // diasCobro: 'todos' | 'lunSab'
+    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos', googleMapsApiKey: '', comisionCobradorPct: 0 }, // diasCobro: 'todos' | 'lunSab'
     usuarios: [
       { id:'u_soporte', usuario:'soporte', claveHash: hashClave('cambiar-esta-clave'), rol:'soporte', nombre:'Soporte Técnico', protegido:true },
       { id:'u_admin_demo', usuario:'admin', claveHash: hashClave('admin123'), rol:'admin', nombre:'Administrador', activo:true }
@@ -437,6 +443,7 @@ function rutasDelUsuario(){
 const PESTANIAS = [
   { id:'inicio', label:'🏠 Inicio', render: renderInicio, ver: ()=>true },
   { id:'prestamos', label:'🧾 Préstamos', render: renderPrestamos, ver: ()=>true },
+  { id:'cartera', label:'📋 Cartera', render: renderCartera, ver: ()=>true },
   { id:'clientes', label:'📇 Clientes', render: renderClientes, ver: ()=>true },
   { id:'rutas', label:'🚚 Rutas', render: renderRutas, ver: esAdmin },
   { id:'cuadre', label:'💰 Cuadre de caja', render: renderCuadre, ver: ()=>true },
@@ -539,7 +546,10 @@ function renderRutas(el){
         <td>${(r.cobradores||[]).map(id=>esc(usuarioDe(id)?.nombre||'?')).join(', ')||'—'}</td>
         <td class="num">${DB.clientes.filter(c=>c.rutaId===r.id).length}</td>
         <td class="num">${DB.prestamos.filter(p=>p.rutaId===r.id && (estadoPrestamo(p)==='activo'||estadoPrestamo(p)==='mora')).length}</td>
-        <td><button class="btn secundario chico" onclick="formRuta('${r.id}')">Editar</button></td>
+        <td style="display:flex;gap:6px;">
+          <button class="btn secundario chico" onclick="abrirHojaRuta('${r.id}')">🗒️ Hoja de ruta de hoy</button>
+          <button class="btn secundario chico" onclick="formRuta('${r.id}')">Editar</button>
+        </td>
       </tr>`).join('') : '<tr><td colspan="5"><div class="vacio">No hay rutas todavía.</div></td></tr>'}</tbody>
     </table></div>
   `;
@@ -580,6 +590,73 @@ function borrarRuta(id){
   if(DB.clientes.some(c=>c.rutaId===id)){ toast('Esta ruta tiene clientes asignados. Reasígnalos antes de eliminarla.'); return; }
   DB.rutas = DB.rutas.filter(r=>r.id!==id);
   guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+
+/* ======================================================================
+   HOJA DE RUTA DIARIA (para que el cobrador lleve impresa o la vea en el celular)
+====================================================================== */
+function datosHojaRuta(rutaId){
+  const ruta = DB.rutas.find(r=>r.id===rutaId);
+  const prestamos = DB.prestamos.filter(p=>p.rutaId===rutaId).filter(p=>{
+    const e = estadoPrestamo(p); return e==='activo' || e==='mora';
+  });
+  const filas = prestamos.map(p=>{
+    const c = clienteDe(p.clienteId);
+    return { p, c, saldo: saldoPrestamo(p), estado: estadoPrestamo(p) };
+  }).sort((a,b)=> (a.c?.nombre||'').localeCompare(b.c?.nombre||''));
+  const totalCuota = filas.reduce((s,f)=>s+Number(f.p.cuotaDiaria||0),0);
+  const totalSaldo = filas.reduce((s,f)=>s+f.saldo,0);
+  return { ruta, filas, totalCuota, totalSaldo };
+}
+function abrirHojaRuta(rutaId){
+  const { ruta, filas, totalCuota, totalSaldo } = datosHojaRuta(rutaId);
+  if(!ruta){ toast('No se encontró la ruta.'); return; }
+  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado})=>`
+    <tr>
+      <td>${esc(c?.nombre||'—')}</td>
+      <td>${esc(c?.direccion||'—')}</td>
+      <td>${esc(c?.telefono||'—')}</td>
+      <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
+      <td class="num">${fmtMoney(saldo)}</td>
+      <td>${estado==='mora'?'<span class="pill mora">Mora</span>':'<span class="pill ok">Al día</span>'}</td>
+      <td>${c?.ubicacion?`<a href="${linkGoogleMaps(c.ubicacion.lat,c.ubicacion.lng)}" target="_blank" rel="noopener">Ver ubicación ↗</a>`:'—'}</td>
+    </tr>`).join('') : '<tr><td colspan="7"><div class="vacio">Esta ruta no tiene préstamos activos hoy.</div></td></tr>';
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>🗒️ Hoja de ruta — ${esc(ruta.nombre)}</h3>
+    <p style="font-size:13px;color:var(--ink-soft);">${fmtDate(todayStr())} · ${filas.length} cliente${filas.length===1?'':'s'} por cobrar · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}</p>
+    <div class="tblwrap" style="max-height:50vh;"><table><thead><tr><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th><th>Ubicación</th></tr></thead>
+    <tbody>${filasHtml}</tbody></table></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn" onclick="imprimirHojaRuta('${ruta.id}')">🖨️ Imprimir / Guardar PDF</button>
+    </div>
+  `);
+}
+function imprimirHojaRuta(rutaId){
+  const { ruta, filas, totalCuota, totalSaldo } = datosHojaRuta(rutaId);
+  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado})=>`
+    <tr>
+      <td>${esc(c?.nombre||'—')}</td>
+      <td>${esc(c?.direccion||'—')}</td>
+      <td>${esc(c?.telefono||'—')}</td>
+      <td>${fmtMoney(p.cuotaDiaria)}</td>
+      <td>${fmtMoney(saldo)}</td>
+      <td>${estado==='mora'?'MORA':'Al día'}</td>
+    </tr>`).join('') : '<tr><td colspan="6">Sin préstamos activos hoy.</td></tr>';
+  const host = document.getElementById('hoja-imprimible');
+  host.innerHTML = `
+    <h2 style="margin:0 0 4px;">${esc(DB.empresa.nombre||'ER TOOL')}</h2>
+    <h3 style="margin:0 0 10px;">Hoja de ruta — ${esc(ruta?.nombre||'')} — ${fmtDate(todayStr())}</h3>
+    <p>${filas.length} cliente${filas.length===1?'':'s'} · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}</p>
+    <table><thead><tr><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th>Cuota diaria</th><th>Saldo</th><th>Estado</th></tr></thead>
+    <tbody>${filasHtml}</tbody></table>
+  `;
+  host.classList.add('imprimiendo');
+  const limpiar = ()=>{ host.classList.remove('imprimiendo'); host.innerHTML=''; window.removeEventListener('afterprint', limpiar); };
+  window.addEventListener('afterprint', limpiar);
+  window.print();
+  setTimeout(limpiar, 3000);
 }
 
 /* ======================================================================
@@ -670,20 +747,56 @@ function activarBloqueUbicacion(prefix, valorInicial){
    CLIENTES (con KYC: foto de cédula + selfie con cédula)
 ====================================================================== */
 function renderClientes(el){
-  const idsRuta = rutasDelUsuario().map(r=>r.id);
-  const lista = esAdmin() ? DB.clientes : DB.clientes.filter(c=>idsRuta.includes(c.rutaId));
   el.innerHTML = `
     <div class="encab-vista"><h2>📇 Clientes</h2><button class="btn" onclick="formCliente()">+ Nuevo cliente</button></div>
+    <div class="campo" style="max-width:380px;"><input type="text" id="clientes-buscar" placeholder="🔎 Buscar por nombre, cédula o teléfono..." oninput="renderClientesTabla()"></div>
+    <div id="clientes-tabla-wrap"></div>
+  `;
+  renderClientesTabla();
+}
+function renderClientesTabla(){
+  const texto = (document.getElementById('clientes-buscar')?.value||'').toLowerCase().trim();
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = esAdmin() ? DB.clientes : DB.clientes.filter(c=>idsRuta.includes(c.rutaId));
+  if(texto) lista = lista.filter(c => (c.nombre||'').toLowerCase().includes(texto) || (c.cedula||'').toLowerCase().includes(texto) || (c.telefono||'').toLowerCase().includes(texto));
+  document.getElementById('clientes-tabla-wrap').innerHTML = `
     <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Cédula</th><th>Teléfono</th><th>Ruta</th><th>KYC</th><th></th></tr></thead>
     <tbody>${lista.length? lista.map(c=>`
-      <tr>
+      <tr class="fila-clic" onclick="verHistorialCliente('${c.id}')">
         <td>${esc(c.nombre)}${c.ubicacion?` <a href="${linkGoogleMaps(c.ubicacion.lat,c.ubicacion.lng)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Ver ubicación en Google Maps">📍</a>`:''}</td><td>${esc(c.cedula)}</td><td>${esc(c.telefono)}</td>
         <td>${esc(rutaDe(c.rutaId)?.nombre||'—')}</td>
         <td>${c.fotoCedula && c.fotoSelfie? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta foto</span>'}</td>
-        <td><button class="btn secundario chico" onclick="formCliente('${c.id}')">Ver / editar</button></td>
-      </tr>`).join('') : '<tr><td colspan="6"><div class="vacio">No hay clientes todavía.</div></td></tr>'}</tbody>
+        <td><button class="btn secundario chico" onclick="event.stopPropagation();formCliente('${c.id}')">Editar</button></td>
+      </tr>`).join('') : '<tr><td colspan="6"><div class="vacio">No se encontraron clientes.</div></td></tr>'}</tbody>
     </table></div>
   `;
+}
+function verHistorialCliente(id){
+  const c = clienteDe(id);
+  const prestamosCliente = DB.prestamos.filter(p=>p.clienteId===id).slice().reverse();
+  const enMoraAhora = prestamosCliente.filter(p=>estadoPrestamo(p)==='mora').length;
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <div class="cli-encab">
+      <div class="avatar-circulo">${esc((c.nombre||'?').trim().charAt(0).toUpperCase())}</div>
+      <div><h3 style="margin-bottom:1px;">${esc(c.nombre)}</h3><p style="font-size:13px;color:var(--ink-soft);margin:0;">${esc(c.cedula)} · ${esc(c.telefono||'sin teléfono')}</p></div>
+    </div>
+    <p style="font-size:13px;color:var(--ink-soft);">${esc(c.direccion||'Sin dirección registrada')} ${c.ubicacion?`· <a href="${linkGoogleMaps(c.ubicacion.lat,c.ubicacion.lng)}" target="_blank" rel="noopener">Ver en Google Maps ↗</a>`:''}</p>
+    <div class="grid-stats" style="margin:12px 0;">
+      <div class="stat"><div class="n">${prestamosCliente.length}</div><div class="l">préstamos en total</div></div>
+      <div class="stat"><div class="n" style="color:${enMoraAhora?'var(--mora)':'inherit'}">${enMoraAhora}</div><div class="l">en mora ahora mismo</div></div>
+    </div>
+    <h4>Historial de préstamos</h4>
+    ${prestamosCliente.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th>Estado</th></tr></thead><tbody>
+      ${prestamosCliente.map(p=>{
+        const est = estadoPrestamo(p);
+        return `<tr class="fila-clic" onclick="cerrarModal();verPrestamo('${p.id}')"><td>${fmtDate(p.fechaInicio)}</td><td class="num">${fmtMoney(p.monto)}</td><td><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span></td></tr>`;
+      }).join('')}
+    </tbody></table></div>` : '<div class="vacio">Este cliente no tiene préstamos todavía.</div>'}
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal();formCliente('${c.id}')">Editar datos</button>
+    </div>
+  `);
 }
 function comprimirImagen(file, maxAncho, calidad){
   return new Promise((resolve,reject)=>{
@@ -783,7 +896,11 @@ function borrarCliente(id){
 /* ======================================================================
    PRÉSTAMOS (cuota fija diaria, estilo "gota a gota")
 ====================================================================== */
-function totalAPagar(p){ return Math.round(Number(p.monto||0) * (1 + Number(p.interesPct||0)/100)); }
+function totalAPagar(p){
+  const base = Math.round(Number(p.monto||0) * (1 + Number(p.interesPct||0)/100));
+  const recargos = (p.recargos||[]).reduce((s,r)=>s+Number(r.monto||0),0);
+  return base + recargos;
+}
 function saldoPrestamo(p){
   const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
   return Math.max(0, totalAPagar(p) - abonado);
@@ -816,10 +933,19 @@ function usuarioDe(id){ return DB.usuarios.find(u=>u.id===id); }
 function prestamoDe(id){ return DB.prestamos.find(p=>p.id===id); }
 
 function renderPrestamos(el){
-  const idsRuta = rutasDelUsuario().map(r=>r.id);
-  const lista = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).slice().reverse();
   el.innerHTML = `
     <div class="encab-vista"><h2>🧾 Préstamos</h2><button class="btn" onclick="formPrestamo()">+ Nuevo préstamo</button></div>
+    <div class="campo" style="max-width:380px;"><input type="text" id="prestamos-buscar" placeholder="🔎 Buscar por cliente o ruta..." oninput="renderPrestamosTabla()"></div>
+    <div id="prestamos-tabla-wrap"></div>
+  `;
+  renderPrestamosTabla();
+}
+function renderPrestamosTabla(){
+  const texto = (document.getElementById('prestamos-buscar')?.value||'').toLowerCase().trim();
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).slice().reverse();
+  if(texto) lista = lista.filter(p => (clienteDe(p.clienteId)?.nombre||'').toLowerCase().includes(texto) || (rutaDe(p.rutaId)?.nombre||'').toLowerCase().includes(texto));
+  document.getElementById('prestamos-tabla-wrap').innerHTML = `
     <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th></tr></thead>
     <tbody>${lista.length? lista.map(p=>{
       const est = estadoPrestamo(p);
@@ -837,6 +963,53 @@ function renderPrestamos(el){
     </table></div>
   `;
 }
+function diasAtrasoPrestamo(p){
+  if(estadoPrestamo(p)!=='mora') return 0;
+  const diasTranscurridos = diffDiasCobro(p, p.fechaInicio, todayStr());
+  const cuotasEsperadas = Math.min(p.plazoDias, diasTranscurridos);
+  const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
+  const cuotasEquivalentesPagadas = p.cuotaDiaria>0 ? abonado/p.cuotaDiaria : 0;
+  return Math.max(0, Math.floor(cuotasEsperadas - cuotasEquivalentesPagadas));
+}
+function renderCartera(el){
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const misPrestamos = esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
+  const activos = misPrestamos.filter(p=>{ const e=estadoPrestamo(p); return e==='activo'||e==='mora'; });
+  const carteraActiva = activos.reduce((s,p)=>s+saldoPrestamo(p),0);
+  const enMora = activos.filter(p=>estadoPrestamo(p)==='mora').map(p=>({p, dias:diasAtrasoPrestamo(p)})).sort((a,b)=>b.dias-a.dias);
+  const totalMora = enMora.reduce((s,x)=>s+saldoPrestamo(x.p),0);
+  const pctMora = carteraActiva>0 ? Math.round(totalMora/carteraActiva*100) : 0;
+  el.innerHTML = `
+    <div class="encab-vista"><h2>📋 Cartera</h2></div>
+    <div class="grid-stats">
+      <div class="stat"><div class="n">${fmtMoney(carteraActiva)}</div><div class="l">cartera activa (saldo total por cobrar)</div></div>
+      <div class="stat"><div class="n" style="color:${totalMora>0?'var(--mora)':'inherit'}">${fmtMoney(totalMora)}</div><div class="l">en mora</div></div>
+      <div class="stat"><div class="n">${pctMora}%</div><div class="l">% de la cartera en mora</div></div>
+      <div class="stat"><div class="n">${enMora.length}</div><div class="l">clientes en mora</div></div>
+    </div>
+    <div class="card"><h3>Préstamos en mora, del más atrasado al más reciente</h3>
+      ${enMora.length? `<div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Días de atraso</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
+        ${enMora.map(({p,dias})=>{
+          const c = clienteDe(p.clienteId);
+          const tel = (c?.telefono||'').replace(/\D/g,'');
+          const codigoPais = DB.empresa.codigoTel||'57';
+          const telCompleto = tel ? (tel.startsWith(codigoPais)?tel:codigoPais+tel) : '';
+          return `<tr>
+            <td>${esc(c?.nombre||'—')}</td>
+            <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
+            <td class="num"><span class="pill mora">${dias} día${dias===1?'':'s'}</span></td>
+            <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
+            <td style="display:flex;gap:6px;">
+              <button class="btn secundario chico" onclick="verPrestamo('${p.id}')">Ver</button>
+              ${telCompleto?`<a class="btn secundario chico" href="https://wa.me/${telCompleto}?text=${encodeURIComponent('Hola '+(c?.nombre||'')+', te recordamos que tienes un pago pendiente de '+fmtMoney(saldoPrestamo(p))+' con '+DB.empresa.nombre+'.')}" target="_blank" rel="noopener">WhatsApp</a>`:''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>` : '<div class="vacio">No hay préstamos en mora. 🎉</div>'}
+    </div>
+  `;
+}
+
 function formPrestamo(){
   const misRutas = rutasDelUsuario();
   const clientesDisponibles = esAdmin() ? DB.clientes : DB.clientes.filter(c=>misRutas.some(r=>r.id===c.rutaId));
@@ -927,6 +1100,8 @@ function verPrestamo(id){
     ${p.renovadoDe ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo es una renovación de otro. <a href="#" onclick="verPrestamo('${p.renovadoDe}');return false;">Ver préstamo anterior</a></div>` : ''}
     ${p.renovadoA ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo fue renovado. <a href="#" onclick="verPrestamo('${p.renovadoA}');return false;">Ver préstamo nuevo</a></div>` : ''}
     ${est!=='pagado' && !p.cancelado ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
+    ${esAdmin() && est==='mora' ? `<button class="btn secundario chico" style="margin-top:8px" onclick="formRecargoMora('${p.id}')">⚠️ Agregar recargo por mora</button>` : ''}
+    ${(p.recargos||[]).length ? `<p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;">Recargos por mora: ${p.recargos.map(r=>fmtMoney(r.monto)+(r.motivo?' ('+esc(r.motivo)+')':'')).join(', ')}</p>` : ''}
     <h4 style="margin-top:16px;">Abonos</h4>
     ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
       ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':''}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
@@ -937,6 +1112,29 @@ function verPrestamo(id){
 function cancelarPrestamo(id){
   const p = prestamoDe(id); p.cancelado = true;
   guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+function formRecargoMora(prestamoId){
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Agregar recargo por mora</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">Este monto se suma al total que debe el cliente. Úsalo con criterio — no se agrega solo, tú decides cuándo aplicarlo.</p>
+    <div class="campo"><label>Monto del recargo</label><input type="number" id="rc-monto" min="0" step="500"></div>
+    <div class="campo"><label>Motivo (opcional)</label><input type="text" id="rc-motivo" placeholder="Ej: 5 días de atraso"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarRecargoMora('${prestamoId}')">Agregar</button>
+    </div>
+  `);
+}
+function guardarRecargoMora(prestamoId){
+  const monto = Number(document.getElementById('rc-monto').value||0);
+  const motivo = document.getElementById('rc-motivo').value.trim();
+  if(!monto){ toast('Ingresa un monto.'); return; }
+  const p = prestamoDe(prestamoId);
+  p.recargos = p.recargos||[];
+  p.recargos.push({ monto, motivo, fecha: todayStr() });
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+  toast('Recargo agregado.');
 }
 function formAbono(prestamoId){
   const p = prestamoDe(prestamoId);
@@ -1143,18 +1341,21 @@ function renderCuadreTabla(){
     const idsPrestamo = prestamosRuta.map(p=>p.id);
     const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta).reduce((s,p)=>s+Number(p.monto||0),0);
     const recaudado = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
-    return { nombre:r.nombre, desembolsado, recaudado, neto: recaudado-desembolsado };
+    const comision = Math.round(recaudado * (Number(DB.empresa.comisionCobradorPct||0)/100));
+    return { nombre:r.nombre, desembolsado, recaudado, neto: recaudado-desembolsado, comision };
   });
-  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, neto:acc.neto+f.neto}), {desembolsado:0,recaudado:0,neto:0});
+  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, neto:acc.neto+f.neto, comision:acc.comision+f.comision}), {desembolsado:0,recaudado:0,neto:0,comision:0});
+  const hayComision = Number(DB.empresa.comisionCobradorPct||0) > 0;
 
   document.getElementById('cuadre-contenido').innerHTML = `
     <div class="grid-stats" style="margin-top:14px;">
       <div class="stat"><div class="n">${fmtMoney(totales.recaudado)}</div><div class="l">recaudado (${fmtDate(desde)} – ${fmtDate(hasta)})</div></div>
       <div class="stat"><div class="n">${fmtMoney(totales.desembolsado)}</div><div class="l">prestado en el periodo</div></div>
       <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja</div></div>
+      ${hayComision?`<div class="stat"><div class="n">${fmtMoney(totales.comision)}</div><div class="l">comisión cobradores (${DB.empresa.comisionCobradorPct}%)</div></div>`:''}
     </div>
-    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Neto</th></tr></thead>
-    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.neto)}</td></tr>`).join('') : '<tr><td colspan="4"><div class="vacio">No hay rutas.</div></td></tr>'}</tbody>
+    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Neto</th>${hayComision?'<th class="num">Comisión</th>':''}</tr></thead>
+    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.neto)}</td>${hayComision?`<td class="num">${fmtMoney(f.comision)}</td>`:''}</tr>`).join('') : `<tr><td colspan="${hayComision?5:4}"><div class="vacio">No hay rutas.</div></td></tr>`}</tbody>
     </table></div>
   `;
 }
@@ -1243,6 +1444,8 @@ function renderEmpresaConfig(el){
           </select>
         </div>
       </div>
+      <div class="campo"><label>Comisión de cobradores (% de lo recaudado)</label><input type="number" id="em-comision" min="0" step="0.5" value="${e.comisionCobradorPct||0}"></div>
+      <p style="font-size:12px;color:var(--ink-soft);margin:2px 0 0;">Se muestra como referencia en el Cuadre de caja — es informativo, todavía no marca comisiones como pagadas.</p>
       <button class="btn" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar</button>
     </div>
 
@@ -1260,18 +1463,74 @@ function renderEmpresaConfig(el){
       <div class="campo"><label>Clave de la API de Google Maps</label><input type="text" id="em-mapskey" value="${esc(e.googleMapsApiKey||'')}" placeholder="AIza..."></div>
       <button class="btn secundario" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar clave</button>
     </div>
+
+    <h3 style="margin-top:30px;">💾 Copia de seguridad</h3>
+    <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;">
+      Descarga una copia de todos los datos de esta empresa (clientes, préstamos, abonos, rutas, usuarios y
+      fotos de verificación) en un solo archivo, o exporta préstamos y abonos en CSV para abrirlos en Excel.
+      Guarda el respaldo en un lugar seguro — quien lo tenga puede ver toda la información del negocio.
+    </p>
+    <div class="card" style="max-width:520px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn secundario" onclick="descargarBackupJSON()">⬇️ Respaldo completo (JSON)</button>
+      <button class="btn secundario" onclick="exportarPrestamosCSV()">⬇️ Préstamos (CSV)</button>
+      <button class="btn secundario" onclick="exportarAbonosCSV()">⬇️ Abonos (CSV)</button>
+    </div>
   `;
 }
 function guardarEmpresaConfig(){
   DB.empresa.nombre = document.getElementById('em-nombre').value.trim() || DB.empresa.nombre;
   DB.empresa.codigoTel = document.getElementById('em-codigotel').value.trim() || '57';
   DB.empresa.diasCobro = document.getElementById('em-diascobro').value;
+  DB.empresa.comisionCobradorPct = Number(document.getElementById('em-comision').value||0);
   DB.empresa.googleMapsApiKey = document.getElementById('em-mapskey').value.trim();
   guardarDB();
   document.getElementById('topbar-empresa').textContent = DB.empresa.nombre;
   document.getElementById('pie-empresa').textContent = DB.empresa.nombre;
   toast('Datos de la empresa guardados.');
   if(DB.empresa.googleMapsApiKey) cargarGoogleMaps();
+}
+
+/* ======================================================================
+   COPIA DE SEGURIDAD / EXPORTAR DATOS
+====================================================================== */
+function descargarArchivo(nombre, contenido, tipo){
+  const blob = new Blob([contenido], { type: tipo });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nombre;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function descargarBackupJSON(){
+  const nombre = 'respaldo_'+(DB.empresa.nombre||'ertool').toLowerCase().replace(/[^a-z0-9]+/g,'_')+'_'+todayStr()+'.json';
+  descargarArchivo(nombre, JSON.stringify(DB, null, 2), 'application/json');
+  toast('Respaldo descargado.');
+}
+function csvEscapar(v){
+  const s = String(v==null?'':v);
+  return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function filasACSV(encabezados, filas){
+  return [encabezados.join(','), ...filas.map(f=>f.map(csvEscapar).join(','))].join('\r\n');
+}
+function exportarPrestamosCSV(){
+  const encabezados = ['ID','Cliente','Cédula','Ruta','Fecha inicio','Monto','Interés %','Plazo días','Cuota diaria','Total a pagar','Saldo','Estado','Cancelado','Renovado de','Renovado a'];
+  const filas = DB.prestamos.map(p=>{
+    const c = clienteDe(p.clienteId);
+    return [p.id, c?.nombre||'', c?.cedula||'', rutaDe(p.rutaId)?.nombre||'', p.fechaInicio, p.monto, p.interesPct, p.plazoDias, p.cuotaDiaria, totalAPagar(p), saldoPrestamo(p), estadoPrestamo(p), p.cancelado?'sí':'no', p.renovadoDe||'', p.renovadoA||''];
+  });
+  descargarArchivo('prestamos_'+todayStr()+'.csv', filasACSV(encabezados, filas), 'text/csv');
+  toast('Préstamos exportados a CSV.');
+}
+function exportarAbonosCSV(){
+  const encabezados = ['ID','Préstamo','Cliente','Fecha','Monto','Tipo','Cobrador'];
+  const filas = DB.abonos.map(a=>{
+    const p = DB.prestamos.find(x=>x.id===a.prestamoId);
+    const c = p ? clienteDe(p.clienteId) : null;
+    return [a.id, a.prestamoId, c?.nombre||'', a.fecha, a.monto, a.tipo||'abono', usuarioDe(a.cobradorId)?.nombre||''];
+  });
+  descargarArchivo('abonos_'+todayStr()+'.csv', filasACSV(encabezados, filas), 'text/csv');
+  toast('Abonos exportados a CSV.');
 }
 
 /* ======================================================================
