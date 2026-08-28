@@ -259,6 +259,7 @@
     <div class="vista" id="vista-clientes"></div>
     <div class="vista" id="vista-prestamos"></div>
     <div class="vista" id="vista-cartera"></div>
+    <div class="vista" id="vista-abonos"></div>
     <div class="vista" id="vista-cuadre"></div>
     <div class="vista" id="vista-reportes"></div>
     <div class="vista" id="vista-usuarios"></div>
@@ -463,6 +464,7 @@ const PESTANIAS = [
   { id:'inicio', label:'🏠 Inicio', render: renderInicio, ver: ()=>true },
   { id:'prestamos', label:'🧾 Préstamos', render: renderPrestamos, ver: ()=>true },
   { id:'cartera', label:'📋 Cartera', render: renderCartera, ver: ()=>true },
+  { id:'abonos', label:'💵 Abonos', render: renderAbonos, ver: ()=>true },
   { id:'clientes', label:'📇 Clientes', render: renderClientes, ver: ()=>true },
   { id:'rutas', label:'🚚 Rutas', render: renderRutas, ver: esAdmin },
   { id:'cuadre', label:'💰 Cuadre de caja', render: renderCuadre, ver: ()=>true },
@@ -1327,7 +1329,7 @@ function verPrestamo(id){
     ${(p.recargos||[]).length ? `<p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;">Recargos por mora: ${p.recargos.map(r=>fmtMoney(r.monto)+(r.motivo?' ('+esc(r.motivo)+')':'')).join(', ')}</p>` : ''}
     <h4 style="margin-top:16px;">Abonos</h4>
     ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
-      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':''}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
+      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':(a.tipo==='liquidacion'?' <span class="pill ok">Liquidación</span>':'')}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="vacio">Sin abonos todavía.</div>'}
     ${esAdmin() && (est==='activo'||est==='mora') ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
   `);
@@ -1412,6 +1414,110 @@ function guardarAbono(prestamoId){
   guardarDB(); cerrarModal();
   const p = prestamoDe(prestamoId);
   refrescarVistaActual();
+  mostrarRecibo(reciboTextoAbono(a), clienteDe(p.clienteId));
+}
+
+/* ======================================================================
+   ABONOS: pestaña propia para ver y cobrar, por cliente, sin tener que
+   entrar primero al préstamo — registrar abono, liquidar de una vez o
+   renovar, todo desde la misma fila.
+====================================================================== */
+function renderAbonos(el){
+  el.innerHTML = `
+    <div class="encab-vista"><h2>💵 Abonos</h2></div>
+    <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;margin-top:-6px;">Registra el abono del día, liquida el préstamo completo o renuévalo — todo por cliente, desde aquí.</p>
+    <div class="campo" style="max-width:380px;"><input type="text" id="abonos-buscar" placeholder="🔎 Buscar por cliente o ruta..." oninput="renderAbonosTabla()"></div>
+    <div id="abonos-tabla-wrap"></div>
+    <h3 style="margin-top:26px;">Abonos recientes</h3>
+    <div id="abonos-recientes-wrap"></div>
+  `;
+  renderAbonosTabla();
+  renderAbonosRecientes();
+}
+function renderAbonosTabla(){
+  const texto = (document.getElementById('abonos-buscar')?.value||'').toLowerCase().trim();
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).filter(p=>{
+    const e = estadoPrestamo(p); return e==='activo' || e==='mora';
+  });
+  if(texto) lista = lista.filter(p => (clienteDe(p.clienteId)?.nombre||'').toLowerCase().includes(texto) || (rutaDe(p.rutaId)?.nombre||'').toLowerCase().includes(texto));
+  lista.sort((a,b)=>{
+    const ea = estadoPrestamo(a)==='mora'?0:1, eb = estadoPrestamo(b)==='mora'?0:1;
+    if(ea!==eb) return ea-eb;
+    return (clienteDe(a.clienteId)?.nombre||'').localeCompare(clienteDe(b.clienteId)?.nombre||'');
+  });
+  document.getElementById('abonos-tabla-wrap').innerHTML = `
+    <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${lista.length? lista.map(p=>{
+      const c = clienteDe(p.clienteId);
+      const est = estadoPrestamo(p);
+      return `<tr>
+        <td><a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a></td>
+        <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
+        <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
+        <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
+        <td>${est==='mora'?'<span class="pill mora">Mora</span>':'<span class="pill ok">Al día</span>'}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn chico" onclick="formAbono('${p.id}')">+ Abono</button>
+          <button class="btn secundario chico" onclick="formLiquidarPrestamo('${p.id}')">💳 Liquidar</button>
+          <button class="btn secundario chico" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button>
+        </td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="6"><div class="vacio">No hay préstamos activos para cobrar.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+function renderAbonosRecientes(){
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const idsPrestamosVisibles = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).map(p=>p.id);
+  const lista = DB.abonos.filter(a=>idsPrestamosVisibles.includes(a.prestamoId)).slice().sort((a,b)=> a.fecha<b.fecha?1:(a.fecha>b.fecha?-1:0)).slice(0,30);
+  document.getElementById('abonos-recientes-wrap').innerHTML = `
+    <div class="tblwrap"><table><thead><tr><th>Fecha</th><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th>Tipo</th><th>Cobrador</th><th></th></tr></thead>
+    <tbody>${lista.length? lista.map(a=>{
+      const p = prestamoDe(a.prestamoId); const c = p?clienteDe(p.clienteId):null;
+      const pillTipo = a.tipo==='renovacion'?'<span class="pill pend">Renovación</span>':(a.tipo==='liquidacion'?'<span class="pill ok">Liquidación</span>':'Abono');
+      return `<tr>
+        <td>${fmtDate(a.fecha)}</td>
+        <td>${esc(c?.nombre||'—')}</td>
+        <td>${esc(p?(rutaDe(p.rutaId)?.nombre||'—'):'—')}</td>
+        <td class="num">${fmtMoney(a.monto)}</td>
+        <td>${pillTipo}</td>
+        <td>${esc(usuarioDe(a.cobradorId)?.nombre||'—')}</td>
+        <td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p?.clienteId}'))">Recibo</button>`:''}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="7"><div class="vacio">Todavía no se han registrado abonos.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+function formLiquidarPrestamo(prestamoId){
+  const p = prestamoDe(prestamoId);
+  const saldo = saldoPrestamo(p);
+  const c = clienteDe(p.clienteId);
+  if(saldo<=0){ toast('Este préstamo ya está saldado.'); return; }
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>💳 Liquidar préstamo</h3>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Esto registra de una vez un abono por todo el saldo pendiente y deja el préstamo de <b>${esc(c.nombre)}</b> completamente pagado.</p>
+    <div class="grid-stats" style="margin:12px 0;">
+      <div class="stat"><div class="n">${fmtMoney(saldo)}</div><div class="l">monto a recibir para liquidar</div></div>
+    </div>
+    <div class="campo"><label>Fecha</label><input type="date" id="lq-fecha" value="${todayStr()}"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarLiquidacion('${p.id}')">Confirmar liquidación</button>
+    </div>
+  `);
+}
+function guardarLiquidacion(prestamoId){
+  const p = prestamoDe(prestamoId);
+  const saldo = saldoPrestamo(p);
+  if(saldo<=0){ toast('Este préstamo ya está saldado.'); cerrarModal(); return; }
+  const fecha = document.getElementById('lq-fecha').value || todayStr();
+  const a = { id: uid('abono'), prestamoId, monto: saldo, fecha, cobradorId: currentUser.id, tipo:'liquidacion' };
+  DB.abonos.push(a);
+  guardarDB(); cerrarModal();
+  refrescarVistaActual();
+  toast('Préstamo liquidado — quedó pagado por completo.');
   mostrarRecibo(reciboTextoAbono(a), clienteDe(p.clienteId));
 }
 
@@ -1827,7 +1933,7 @@ function reporteAbonos(){
   });
   const filasHtml = lista.map(a=>{
     const p = prestamoDe(a.prestamoId); const c = p?clienteDe(p.clienteId):null;
-    return [fmtDate(a.fecha), esc(c?.nombre||'—'), esc(p?(rutaDe(p.rutaId)?.nombre||'—'):'—'), fmtMoney(a.monto), a.tipo==='renovacion'?'<span class="pill pend">Renovación</span>':'Abono', esc(usuarioDe(a.cobradorId)?.nombre||'—')];
+    return [fmtDate(a.fecha), esc(c?.nombre||'—'), esc(p?(rutaDe(p.rutaId)?.nombre||'—'):'—'), fmtMoney(a.monto), a.tipo==='renovacion'?'<span class="pill pend">Renovación</span>':(a.tipo==='liquidacion'?'<span class="pill ok">Liquidación</span>':'Abono'), esc(usuarioDe(a.cobradorId)?.nombre||'—')];
   });
   const totalAbonos = lista.reduce((s,a)=>s+Number(a.monto||0),0);
   pintarReporte('Abonos — total '+fmtMoney(totalAbonos), encabezados, filasHtml, filasCSV);
