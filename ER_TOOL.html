@@ -633,62 +633,144 @@ function borrarRuta(id){
 }
 
 /* ======================================================================
-   HOJA DE RUTA DIARIA (para que el cobrador lleve impresa o la vea en el celular)
+   HOJA DE RUTA DIARIA (para que el cobrador lleve impresa o la vea en el
+   celular) — con orden opcional "por cercanía" para no perder tiempo:
+   usa las ubicaciones GPS guardadas de cada cliente/préstamo y arma la
+   secuencia de visita más corta con un algoritmo de vecino más cercano,
+   además de un link directo para abrir toda la ruta en Google Maps.
 ====================================================================== */
-function datosHojaRuta(rutaId){
+function distanciaKm(lat1, lng1, lat2, lng2){
+  const R = 6371;
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLng = (lng2-lng1) * Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+/* Vecino más cercano: en cada paso salta al punto no visitado más cercano al último.
+   Si no hay un origen (no se pudo obtener el GPS del cobrador), arranca desde el
+   primer punto de la lista — sigue evitando zigzags entre los demás. */
+function ordenarPorCercania(puntos, origen){
+  const restantes = puntos.slice();
+  const ordenados = [];
+  let actual = origen;
+  if(!actual && restantes.length){ actual = { lat: restantes[0].lat, lng: restantes[0].lng }; ordenados.push(restantes.shift()); }
+  while(restantes.length){
+    let idxMasCercano = 0, distMin = Infinity;
+    restantes.forEach((p,i)=>{
+      const d = distanciaKm(actual.lat, actual.lng, p.lat, p.lng);
+      if(d < distMin){ distMin = d; idxMasCercano = i; }
+    });
+    const [siguiente] = restantes.splice(idxMasCercano, 1);
+    ordenados.push(siguiente);
+    actual = { lat: siguiente.lat, lng: siguiente.lng };
+  }
+  return ordenados;
+}
+/* Link para abrir la ruta completa en la app de Google Maps, ya en el orden calculado.
+   No hace falta clave de Google Maps ni pedir el GPS: si no se indica un origen, la
+   propia app de Maps usa la ubicación actual del celular como punto de partida. */
+function linkRutaGoogleMaps(puntosOrdenados, origen){
+  if(!puntosOrdenados.length) return null;
+  const destino = puntosOrdenados[puntosOrdenados.length-1];
+  const intermedios = puntosOrdenados.slice(0, -1);
+  let url = 'https://www.google.com/maps/dir/?api=1&destination='+destino.lat+','+destino.lng+'&travelmode=driving';
+  if(origen) url += '&origin='+origen.lat+','+origen.lng;
+  if(intermedios.length) url += '&waypoints=' + intermedios.map(p=>p.lat+','+p.lng).join('|');
+  return url;
+}
+function datosHojaRuta(rutaId, opciones){
+  opciones = opciones || {};
   const ruta = DB.rutas.find(r=>r.id===rutaId);
   const prestamos = DB.prestamos.filter(p=>p.rutaId===rutaId).filter(p=>{
     const e = estadoPrestamo(p); return e==='activo' || e==='mora';
   });
-  const filas = prestamos.map(p=>{
+  let filas = prestamos.map(p=>{
     const c = clienteDe(p.clienteId);
-    return { p, c, saldo: saldoPrestamo(p), estado: estadoPrestamo(p) };
-  }).sort((a,b)=> (a.c?.nombre||'').localeCompare(b.c?.nombre||''));
+    return { p, c, saldo: saldoPrestamo(p), estado: estadoPrestamo(p), ubicacion: p.ubicacion || c?.ubicacion || null };
+  });
+  let distanciaTotalKm = null;
+  if(opciones.ordenarPorCercania){
+    const conUbicacion = filas.filter(f=>f.ubicacion);
+    const sinUbicacion = filas.filter(f=>!f.ubicacion).sort((a,b)=>(a.c?.nombre||'').localeCompare(b.c?.nombre||''));
+    const puntos = conUbicacion.map(f=>Object.assign({}, f, { lat:f.ubicacion.lat, lng:f.ubicacion.lng }));
+    const ordenados = ordenarPorCercania(puntos, opciones.origen || null);
+    if(ordenados.length){
+      let anterior = opciones.origen || null;
+      distanciaTotalKm = 0;
+      ordenados.forEach(f=>{
+        if(anterior) distanciaTotalKm += distanciaKm(anterior.lat, anterior.lng, f.lat, f.lng);
+        anterior = { lat:f.lat, lng:f.lng };
+      });
+    }
+    filas = [...ordenados, ...sinUbicacion];
+  }else{
+    filas.sort((a,b)=> (a.c?.nombre||'').localeCompare(b.c?.nombre||''));
+  }
   const totalCuota = filas.reduce((s,f)=>s+Number(f.p.cuotaDiaria||0),0);
   const totalSaldo = filas.reduce((s,f)=>s+f.saldo,0);
-  return { ruta, filas, totalCuota, totalSaldo };
+  return { ruta, filas, totalCuota, totalSaldo, distanciaTotalKm };
 }
-function abrirHojaRuta(rutaId){
-  const { ruta, filas, totalCuota, totalSaldo } = datosHojaRuta(rutaId);
+function abrirHojaRuta(rutaId, origen){
+  const ordenar = origen !== undefined;
+  const { ruta, filas, totalCuota, totalSaldo, distanciaTotalKm } = datosHojaRuta(rutaId, { ordenarPorCercania: ordenar, origen: (origen && origen!==true) ? origen : null });
   if(!ruta){ toast('No se encontró la ruta.'); return; }
-  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado})=>`
+  const conUbicacion = filas.filter(f=>f.ubicacion);
+  const sinUbicacion = filas.length - conUbicacion.length;
+  const linkMaps = ordenar ? linkRutaGoogleMaps(conUbicacion.map(f=>f.ubicacion), (origen && origen!==true) ? origen : null) : null;
+  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado,ubicacion},i)=>`
     <tr>
+      <td class="num">${ordenar ? (i+1) : ''}</td>
       <td>${esc(c?.nombre||'—')}</td>
       <td>${esc(c?.direccion||'—')}</td>
       <td>${esc(c?.telefono||'—')}</td>
       <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
       <td class="num">${fmtMoney(saldo)}</td>
       <td>${estado==='mora'?'<span class="pill mora">Mora</span>':'<span class="pill ok">Al día</span>'}</td>
-      <td>${c?.ubicacion?`<a href="${linkGoogleMaps(c.ubicacion.lat,c.ubicacion.lng)}" target="_blank" rel="noopener">Ver ubicación ↗</a>`:'—'}</td>
-    </tr>`).join('') : '<tr><td colspan="7"><div class="vacio">Esta ruta no tiene préstamos activos hoy.</div></td></tr>';
+      <td>${ubicacion?`<a href="${linkGoogleMaps(ubicacion.lat,ubicacion.lng)}" target="_blank" rel="noopener">Ver ↗</a>`:'—'}</td>
+    </tr>`).join('') : '<tr><td colspan="8"><div class="vacio">Esta ruta no tiene préstamos activos hoy.</div></td></tr>';
   abrirModal(`
     <button class="cerrar" onclick="cerrarModal()">✕</button>
     <h3>🗒️ Hoja de ruta — ${esc(ruta.nombre)}</h3>
     <p style="font-size:13px;color:var(--ink-soft);">${fmtDate(todayStr())} · ${filas.length} cliente${filas.length===1?'':'s'} por cobrar · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}</p>
-    <div class="tblwrap" style="max-height:50vh;"><table><thead><tr><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th><th>Ubicación</th></tr></thead>
+    <div class="fila" style="margin:6px 0 10px;flex-wrap:wrap;">
+      <button class="btn secundario chico" onclick="optimizarHojaRuta('${ruta.id}')">🧭 ${ordenar?'Volver a ordenar':'Ordenar'} por cercanía (ruta más corta)</button>
+      ${linkMaps ? `<a class="btn chico" href="${linkMaps}" target="_blank" rel="noopener">🗺️ Abrir ruta en Google Maps</a>` : ''}
+    </div>
+    ${ordenar ? `<p style="font-size:12px;color:var(--ink-soft);">Orden de visita calculado ${(origen && origen!==true)?'desde tu ubicación actual':'por cercanía entre clientes'}${distanciaTotalKm!=null?' — recorrido aprox. '+distanciaTotalKm.toFixed(1)+' km en línea recta':''}.${sinUbicacion?' '+sinUbicacion+' cliente(s) sin ubicación guardada quedan al final, sin ordenar.':''}</p>` : `<p style="font-size:12px;color:var(--ink-soft);">Toca "Ordenar por cercanía" para armar la ruta empezando desde donde estás, visitando primero al cliente más cercano y así sucesivamente.</p>`}
+    <div class="tblwrap" style="max-height:50vh;"><table><thead><tr><th>#</th><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th><th>Ubicación</th></tr></thead>
     <tbody>${filasHtml}</tbody></table></div>
     <div class="acciones-modal">
       <button class="btn secundario" onclick="cerrarModal()">Cerrar</button>
-      <button class="btn" onclick="imprimirHojaRuta('${ruta.id}')">🖨️ Imprimir / Guardar PDF</button>
+      <button class="btn" onclick="imprimirHojaRuta('${ruta.id}', ${ordenar?'true':'false'})">🖨️ Imprimir / Guardar PDF</button>
     </div>
   `);
 }
-function imprimirHojaRuta(rutaId){
-  const { ruta, filas, totalCuota, totalSaldo } = datosHojaRuta(rutaId);
-  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado})=>`
+function optimizarHojaRuta(rutaId){
+  if(!navigator.geolocation){ toast('Este navegador no permite obtener tu ubicación GPS. Se ordenará solo por cercanía entre los clientes.'); abrirHojaRuta(rutaId, true); return; }
+  toast('Obteniendo tu ubicación para calcular la ruta más corta...');
+  navigator.geolocation.getCurrentPosition(
+    pos => abrirHojaRuta(rutaId, { lat: pos.coords.latitude, lng: pos.coords.longitude }),
+    () => { toast('No se pudo obtener tu ubicación GPS. Se ordenará solo por cercanía entre los clientes.'); abrirHojaRuta(rutaId, true); },
+    { enableHighAccuracy:true, timeout:8000 }
+  );
+}
+function imprimirHojaRuta(rutaId, ordenar){
+  const { ruta, filas, totalCuota, totalSaldo, distanciaTotalKm } = datosHojaRuta(rutaId, { ordenarPorCercania: !!ordenar });
+  const filasHtml = filas.length ? filas.map(({p,c,saldo,estado},i)=>`
     <tr>
+      <td>${ordenar ? (i+1) : ''}</td>
       <td>${esc(c?.nombre||'—')}</td>
       <td>${esc(c?.direccion||'—')}</td>
       <td>${esc(c?.telefono||'—')}</td>
       <td>${fmtMoney(p.cuotaDiaria)}</td>
       <td>${fmtMoney(saldo)}</td>
       <td>${estado==='mora'?'MORA':'Al día'}</td>
-    </tr>`).join('') : '<tr><td colspan="6">Sin préstamos activos hoy.</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="7">Sin préstamos activos hoy.</td></tr>';
   imprimirHTML(`
     <h2 style="margin:0 0 4px;">${esc(DB.empresa.nombre||'ER TOOL')}</h2>
     <h3 style="margin:0 0 10px;">Hoja de ruta — ${esc(ruta?.nombre||'')} — ${fmtDate(todayStr())}</h3>
-    <p>${filas.length} cliente${filas.length===1?'':'s'} · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}</p>
-    <table><thead><tr><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th>Cuota diaria</th><th>Saldo</th><th>Estado</th></tr></thead>
+    <p>${filas.length} cliente${filas.length===1?'':'s'} · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}${ordenar?' · orden por cercanía'+(distanciaTotalKm!=null?' (~'+distanciaTotalKm.toFixed(1)+' km)':''):''}</p>
+    <table><thead><tr><th>${ordenar?'#':''}</th><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th>Cuota diaria</th><th>Saldo</th><th>Estado</th></tr></thead>
     <tbody>${filasHtml}</tbody></table>
   `);
 }
