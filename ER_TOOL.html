@@ -6,22 +6,34 @@
 <title>ER TOOL</title>
 <style>
   :root{
-    --bg:#f4f5f7; --panel:#ffffff; --ink:#1c2333; --ink-soft:#5b6274; --line:#e3e5ea;
-    --accent:#0f6e4f; --accent-ink:#ffffff; --accent-soft:#e3f3ec;
-    --warn:#b3401f; --warn-soft:#fdeae3; --ok:#0f6e4f; --ok-soft:#e3f3ec;
-    --mora:#9a3e2e; --mora-soft:#f6e2dc; --pend:#8a6d1a; --pend-soft:#f7edd2;
-    --shadow: 0 1px 2px rgba(20,25,40,.06), 0 6px 18px rgba(20,25,40,.07);
-    --radius: 10px;
+    --navy-dark:#0b1628;
+    --bg:#0d1a2e; --panel:#16293f; --panel-2:#1b3355; --ink:#eef2f8; --ink-soft:#9aa8bd; --line:rgba(216,174,85,.18);
+    --accent:#d3560f; --accent-ink:#ffffff; --accent-soft:rgba(211,86,15,.18);
+    --gold:#d8ae55;
+    --warn:#ff6b6b; --warn-soft:rgba(255,107,107,.15); --ok:#3ddc91; --ok-soft:rgba(61,220,145,.15);
+    --mora:#ff6b6b; --mora-soft:rgba(255,107,107,.15); --pend:#d8ae55; --pend-soft:rgba(216,174,85,.18);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    --radius: 14px;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;}
   body{
-    background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+    background:
+      radial-gradient(1100px 700px at 100% -10%, rgba(211,86,15,.06), transparent 60%),
+      radial-gradient(900px 600px at -10% 0%, rgba(216,174,85,.05), transparent 55%),
+      var(--bg);
+    color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
     font-size:15px; line-height:1.45; -webkit-tap-highlight-color:transparent;
   }
   button, input, select, textarea{ font-family:inherit; font-size:inherit; }
   h1,h2,h3,h4{ margin:0 0 8px; }
-  a{ color:var(--accent); }
+  a{ color:var(--gold); }
+  ::placeholder{ color:var(--ink-soft); opacity:1; }
+  input[type="date"]{ color-scheme: dark; }
+  input[type="date"]::-webkit-calendar-picker-indicator{
+    filter: invert(63%) sepia(46%) saturate(455%) hue-rotate(1deg) brightness(96%) contrast(92%);
+    cursor:pointer;
+  }
   .hidden{ display:none !important; }
   .btn{
     display:inline-flex; align-items:center; justify-content:center; gap:6px;
@@ -34,7 +46,7 @@
   .btn.chico{ padding:6px 10px; font-size:13px; border-radius:6px; }
   .btn:disabled{ opacity:.5; cursor:not-allowed; }
   input[type=text], input[type=password], input[type=number], input[type=date], input[type=tel], input[type=email], select, textarea{
-    width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink);
+    width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--ink);
   }
   label{ display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:10px 0 4px; }
   .campo{ margin-bottom:4px; }
@@ -88,7 +100,7 @@
   .tblwrap{ overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); }
   .num{ font-variant-numeric: tabular-nums; text-align:right; }
   tr.fila-clic{ cursor:pointer; }
-  tr.fila-clic:hover{ background:#fafbfc; }
+  tr.fila-clic:hover{ background:var(--panel-2); }
 
   .grid-stats{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; }
   .grid-stats .stat{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
@@ -96,7 +108,7 @@
   .grid-stats .stat .l{ font-size:11.5px; color:var(--ink-soft); margin-top:2px; }
 
   .modal-fondo{
-    position:fixed; inset:0; background:rgba(20,25,40,.45); display:flex; align-items:flex-end;
+    position:fixed; inset:0; background:rgba(3,7,15,.6); display:flex; align-items:flex-end;
     justify-content:center; z-index:100; padding:0;
   }
   @media (min-width:640px){ .modal-fondo{ align-items:center; padding:20px; } }
@@ -114,13 +126,13 @@
   .foto-kyc .slot{
     width:120px; height:90px; border:1.5px dashed var(--line); border-radius:8px; display:flex; flex-direction:column;
     align-items:center; justify-content:center; gap:4px; font-size:11px; color:var(--ink-soft); position:relative; overflow:hidden;
-    background:#fafbfc; cursor:pointer;
+    background:var(--panel-2); cursor:pointer;
   }
   .foto-kyc .slot img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
   .foto-kyc .slot input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
 
   .toast{
-    position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1c2333; color:#fff;
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--navy-dark); color:var(--ink); border:1px solid var(--line);
     padding:10px 18px; border-radius:8px; font-size:13.5px; z-index:200; box-shadow:var(--shadow); max-width:90vw; text-align:center;
   }
 
@@ -133,7 +145,7 @@
     #recibo-imprimible, #recibo-imprimible *{ visibility:visible; }
     #recibo-imprimible{ display:block; position:absolute; top:0; left:0; width:80mm; padding:6px; font-family:'Courier New',monospace; font-size:12px; }
   }
-  .recibo-preview{ font-family:'Courier New',monospace; font-size:12.5px; background:#fafbfc; border:1px dashed var(--line); border-radius:8px; padding:12px; white-space:pre-wrap; }
+  .recibo-preview{ font-family:'Courier New',monospace; font-size:12.5px; background:var(--panel-2); border:1px dashed var(--line); border-radius:8px; padding:12px; white-space:pre-wrap; }
 
   .rol-badge{ font-size:10.5px; padding:2px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:700; text-transform:uppercase; }
 
@@ -423,13 +435,13 @@ function rutasDelUsuario(){
 }
 
 const PESTANIAS = [
-  { id:'inicio', label:'Inicio', render: renderInicio, ver: ()=>true },
-  { id:'prestamos', label:'Préstamos', render: renderPrestamos, ver: ()=>true },
-  { id:'clientes', label:'Clientes', render: renderClientes, ver: ()=>true },
-  { id:'rutas', label:'Rutas', render: renderRutas, ver: esAdmin },
-  { id:'cuadre', label:'Cuadre de caja', render: renderCuadre, ver: ()=>true },
-  { id:'usuarios', label:'Usuarios', render: renderUsuarios, ver: esAdmin },
-  { id:'empresa', label:'Empresa', render: renderEmpresaConfig, ver: esAdmin }
+  { id:'inicio', label:'🏠 Inicio', render: renderInicio, ver: ()=>true },
+  { id:'prestamos', label:'🧾 Préstamos', render: renderPrestamos, ver: ()=>true },
+  { id:'clientes', label:'📇 Clientes', render: renderClientes, ver: ()=>true },
+  { id:'rutas', label:'🚚 Rutas', render: renderRutas, ver: esAdmin },
+  { id:'cuadre', label:'💰 Cuadre de caja', render: renderCuadre, ver: ()=>true },
+  { id:'usuarios', label:'👥 Usuarios', render: renderUsuarios, ver: esAdmin },
+  { id:'empresa', label:'🏢 Empresa', render: renderEmpresaConfig, ver: esAdmin }
 ];
 
 function iniciarApp(){
@@ -477,7 +489,7 @@ function renderInicio(el){
   const enMora = prestamosVisibles.filter(p=>estadoPrestamo(p)==='mora');
 
   el.innerHTML = `
-    <div class="encab-vista"><h2>Hoy — ${fmtDate(hoy)}</h2></div>
+    <div class="encab-vista"><h2>🏠 Hoy — ${fmtDate(hoy)}</h2></div>
     <div class="grid-stats">
       <div class="stat"><div class="n">${fmtMoney(recaudadoHoy)}</div><div class="l">recaudado hoy</div></div>
       <div class="stat"><div class="n">${fmtMoney(desembolsadoHoy)}</div><div class="l">prestado hoy</div></div>
@@ -519,7 +531,7 @@ function renderTablaPendientesHoy(prestamosVisibles){
 ====================================================================== */
 function renderRutas(el){
   el.innerHTML = `
-    <div class="encab-vista"><h2>Rutas</h2><button class="btn" onclick="formRuta()">+ Nueva ruta</button></div>
+    <div class="encab-vista"><h2>🚚 Rutas</h2><button class="btn" onclick="formRuta()">+ Nueva ruta</button></div>
     <div class="tblwrap"><table><thead><tr><th>Ruta</th><th>Cobradores</th><th class="num">Clientes</th><th class="num">Préstamos activos</th><th></th></tr></thead>
     <tbody>${DB.rutas.length? DB.rutas.map(r=>`
       <tr>
@@ -600,7 +612,7 @@ function bloqueUbicacionHTML(prefix, valor){
         <span id="${prefix}-estado" style="font-size:12.5px;color:var(--ink-soft);">${tieneValor?('Guardada: '+Number(valor.lat).toFixed(5)+', '+Number(valor.lng).toFixed(5)):'Sin ubicación guardada'}</span>
         <a id="${prefix}-link" href="${tieneValor?linkGoogleMaps(valor.lat,valor.lng):'#'}" target="_blank" rel="noopener" style="font-size:12.5px;${tieneValor?'':'display:none;'}">Ver en Google Maps ↗</a>
       </div>
-      <div id="${prefix}-mapa" style="height:170px;border:1px solid var(--line);border-radius:8px;margin-top:8px;display:none;background:#f2f2f2;"></div>
+      <div id="${prefix}-mapa" style="height:170px;border:1px solid var(--line);border-radius:8px;margin-top:8px;display:none;background:var(--panel-2);"></div>
       <input type="hidden" id="${prefix}-lat" value="${tieneValor?valor.lat:''}">
       <input type="hidden" id="${prefix}-lng" value="${tieneValor?valor.lng:''}">
     </div>
@@ -661,7 +673,7 @@ function renderClientes(el){
   const idsRuta = rutasDelUsuario().map(r=>r.id);
   const lista = esAdmin() ? DB.clientes : DB.clientes.filter(c=>idsRuta.includes(c.rutaId));
   el.innerHTML = `
-    <div class="encab-vista"><h2>Clientes</h2><button class="btn" onclick="formCliente()">+ Nuevo cliente</button></div>
+    <div class="encab-vista"><h2>📇 Clientes</h2><button class="btn" onclick="formCliente()">+ Nuevo cliente</button></div>
     <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Cédula</th><th>Teléfono</th><th>Ruta</th><th>KYC</th><th></th></tr></thead>
     <tbody>${lista.length? lista.map(c=>`
       <tr>
@@ -807,7 +819,7 @@ function renderPrestamos(el){
   const idsRuta = rutasDelUsuario().map(r=>r.id);
   const lista = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).slice().reverse();
   el.innerHTML = `
-    <div class="encab-vista"><h2>Préstamos</h2><button class="btn" onclick="formPrestamo()">+ Nuevo préstamo</button></div>
+    <div class="encab-vista"><h2>🧾 Préstamos</h2><button class="btn" onclick="formPrestamo()">+ Nuevo préstamo</button></div>
     <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th></tr></thead>
     <tbody>${lista.length? lista.map(p=>{
       const est = estadoPrestamo(p);
@@ -1102,7 +1114,7 @@ function imprimirRecibo(texto){
 ====================================================================== */
 function renderCuadre(el){
   el.innerHTML = `
-    <div class="encab-vista"><h2>Cuadre de caja</h2></div>
+    <div class="encab-vista"><h2>💰 Cuadre de caja</h2></div>
     <div class="fila" style="max-width:420px;">
       <div class="campo"><label>Periodo</label>
         <select id="cu-periodo" onchange="renderCuadreTabla()"><option value="dia">Diario</option><option value="semana">Semanal</option><option value="mes">Mensual</option></select>
@@ -1152,7 +1164,7 @@ function renderCuadreTabla(){
 ====================================================================== */
 function renderUsuarios(el){
   el.innerHTML = `
-    <div class="encab-vista"><h2>Usuarios</h2><button class="btn" onclick="formUsuario()">+ Nuevo usuario</button></div>
+    <div class="encab-vista"><h2>👥 Usuarios</h2><button class="btn" onclick="formUsuario()">+ Nuevo usuario</button></div>
     <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th></th></tr></thead>
     <tbody>${DB.usuarios.map(u=>`
       <tr>
@@ -1219,7 +1231,7 @@ function borrarUsuario(id){
 function renderEmpresaConfig(el){
   const e = DB.empresa;
   el.innerHTML = `
-    <div class="encab-vista"><h2>Datos de la empresa</h2></div>
+    <div class="encab-vista"><h2>🏢 Datos de la empresa</h2></div>
     <div class="card" style="max-width:520px;">
       <div class="campo"><label>Nombre del negocio</label><input type="text" id="em-nombre" value="${esc(e.nombre||'')}"></div>
       <div class="fila">
