@@ -260,6 +260,7 @@
     <div class="vista" id="vista-prestamos"></div>
     <div class="vista" id="vista-cartera"></div>
     <div class="vista" id="vista-cuadre"></div>
+    <div class="vista" id="vista-reportes"></div>
     <div class="vista" id="vista-usuarios"></div>
     <div class="vista" id="vista-empresa"></div>
   </main>
@@ -465,6 +466,7 @@ const PESTANIAS = [
   { id:'clientes', label:'📇 Clientes', render: renderClientes, ver: ()=>true },
   { id:'rutas', label:'🚚 Rutas', render: renderRutas, ver: esAdmin },
   { id:'cuadre', label:'💰 Cuadre de caja', render: renderCuadre, ver: ()=>true },
+  { id:'reportes', label:'📊 Reportes', render: renderReportes, ver: esAdmin },
   { id:'usuarios', label:'👥 Usuarios', render: renderUsuarios, ver: esAdmin },
   { id:'empresa', label:'🏢 Empresa', render: renderEmpresaConfig, ver: esAdmin }
 ];
@@ -682,14 +684,19 @@ function imprimirHojaRuta(rutaId){
       <td>${fmtMoney(saldo)}</td>
       <td>${estado==='mora'?'MORA':'Al día'}</td>
     </tr>`).join('') : '<tr><td colspan="6">Sin préstamos activos hoy.</td></tr>';
-  const host = document.getElementById('hoja-imprimible');
-  host.innerHTML = `
+  imprimirHTML(`
     <h2 style="margin:0 0 4px;">${esc(DB.empresa.nombre||'ER TOOL')}</h2>
     <h3 style="margin:0 0 10px;">Hoja de ruta — ${esc(ruta?.nombre||'')} — ${fmtDate(todayStr())}</h3>
     <p>${filas.length} cliente${filas.length===1?'':'s'} · cuota total esperada ${fmtMoney(totalCuota)} · saldo total ${fmtMoney(totalSaldo)}</p>
     <table><thead><tr><th>Cliente</th><th>Dirección</th><th>Teléfono</th><th>Cuota diaria</th><th>Saldo</th><th>Estado</th></tr></thead>
     <tbody>${filasHtml}</tbody></table>
-  `;
+  `);
+}
+/* Imprime cualquier bloque de HTML (tablas de reportes, hoja de ruta, etc.) usando la hoja
+   #hoja-imprimible, que solo se hace visible durante la impresión (ver CSS @media print). */
+function imprimirHTML(html){
+  const host = document.getElementById('hoja-imprimible');
+  host.innerHTML = html;
   host.classList.add('imprimiendo');
   const limpiar = ()=>{ host.classList.remove('imprimiendo'); host.innerHTML=''; window.removeEventListener('afterprint', limpiar); };
   window.addEventListener('afterprint', limpiar);
@@ -828,11 +835,57 @@ function verHistorialCliente(id){
     ${prestamosCliente.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th>Estado</th></tr></thead><tbody>
       ${prestamosCliente.map(p=>{
         const est = estadoPrestamo(p);
-        return `<tr class="fila-clic" onclick="cerrarModal();verPrestamo('${p.id}')"><td>${fmtDate(p.fechaInicio)}</td><td class="num">${fmtMoney(p.monto)}</td><td><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span></td></tr>`;
+        const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='pendiente'?'pend':(est==='rechazado'?'mora':(est==='cancelado'?'pend':'ok'))));
+        return `<tr class="fila-clic" onclick="cerrarModal();verPrestamo('${p.id}')"><td>${fmtDate(p.fechaInicio)}</td><td class="num">${fmtMoney(p.monto)}</td><td><span class="pill ${pillClass}">${est}</span></td></tr>`;
       }).join('')}
     </tbody></table></div>` : '<div class="vacio">Este cliente no tiene préstamos todavía.</div>'}
     <div class="acciones-modal">
+      <button class="btn secundario" onclick="verEstadoCuentaCliente('${c.id}')">📄 Estado de cuenta</button>
       <button class="btn secundario" onclick="cerrarModal();formCliente('${c.id}')">Editar datos</button>
+    </div>
+  `);
+}
+/* Estado de cuenta del cliente: cuántas cuotas debe, cuántas ha pagado, saldo por cada
+   préstamo — para imprimir o mandar por WhatsApp (task del usuario). */
+function textoEstadoCuenta(clienteId){
+  const c = clienteDe(clienteId);
+  const prestamos = DB.prestamos.filter(p=>p.clienteId===clienteId && p.estadoAprobacion!=='rechazado').slice().reverse();
+  const lineas = ['*ER TOOL* — Estado de cuenta', DB.empresa.nombre, '------------------------------', 'Cliente: '+c.nombre, 'Cédula: '+c.cedula, 'Fecha: '+fmtDate(todayStr()), '------------------------------'];
+  if(!prestamos.length){
+    lineas.push('Este cliente no tiene préstamos registrados.');
+  }else{
+    prestamos.forEach(p=>{
+      const est = estadoPrestamo(p);
+      if(est==='pendiente'){
+        lineas.push('Préstamo solicitado el '+fmtDate(p.fechaInicio)+' — '+fmtMoney(p.monto)+' (esperando aprobación)');
+      }else{
+        const r = resumenCuotasPrestamo(p);
+        lineas.push('Préstamo del '+fmtDate(p.fechaInicio)+' — '+fmtMoney(p.monto)+' ('+est+')');
+        lineas.push('  Cuotas pagadas: '+r.cuotasPagadas+' de '+p.plazoDias+' (le faltan '+r.cuotasPendientes+')');
+        lineas.push('  Saldo pendiente: '+fmtMoney(saldoPrestamo(p)));
+      }
+      lineas.push('');
+    });
+  }
+  const saldoTotal = prestamos.filter(p=>estadoPrestamo(p)!=='pendiente').reduce((s,p)=>s+saldoPrestamo(p),0);
+  lineas.push('------------------------------', 'Saldo total pendiente: '+fmtMoney(saldoTotal));
+  return lineas.join('\n');
+}
+function verEstadoCuentaCliente(clienteId){
+  const c = clienteDe(clienteId);
+  const texto = textoEstadoCuenta(clienteId);
+  const tel = (c?.telefono||'').replace(/\D/g,'');
+  const codigoPais = DB.empresa.codigoTel||'57';
+  const telCompleto = tel ? (tel.startsWith(codigoPais)?tel:codigoPais+tel) : '';
+  const linkWa = telCompleto ? 'https://wa.me/'+telCompleto+'?text='+encodeURIComponent(texto.replace(/\*/g,'')) : '';
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>📄 Estado de cuenta</h3>
+    <div class="recibo-preview">${esc(texto)}</div>
+    <div class="acciones-modal">
+      ${linkWa? `<a class="btn" href="${linkWa}" target="_blank" rel="noopener">📲 Enviar por WhatsApp</a>` : '<span style="font-size:12px;color:var(--ink-soft)">Este cliente no tiene teléfono guardado.</span>'}
+      <button class="btn secundario" onclick="imprimirRecibo(${JSON.stringify(texto)})">🖨️ Imprimir / PDF</button>
+      <button class="btn secundario" onclick="cerrarModal()">Cerrar</button>
     </div>
   `);
 }
@@ -1018,6 +1071,16 @@ function diasAtrasoPrestamo(p){
   const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
   const cuotasEquivalentesPagadas = p.cuotaDiaria>0 ? abonado/p.cuotaDiaria : 0;
   return Math.max(0, Math.floor(cuotasEsperadas - cuotasEquivalentesPagadas));
+}
+/* Cuántas cuotas debería llevar pagadas un préstamo hasta hoy vs. cuántas lleva pagadas de
+   verdad (según lo abonado ÷ cuota diaria) — para el estado de cuenta del cliente. */
+function resumenCuotasPrestamo(p){
+  const diasTranscurridos = Math.min(p.plazoDias, diffDiasCobro(p, p.fechaInicio, todayStr()));
+  const cuotasEsperadas = Math.max(0, diasTranscurridos);
+  const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
+  const cuotasPagadas = p.cuotaDiaria>0 ? Math.floor(abonado/p.cuotaDiaria) : 0;
+  const cuotasPendientes = Math.max(0, cuotasEsperadas - cuotasPagadas);
+  return { cuotasEsperadas, cuotasPagadas, cuotasPendientes, plazoDias:p.plazoDias, abonado };
 }
 function renderCartera(el){
   const idsRuta = rutasDelUsuario().map(r=>r.id);
@@ -1519,6 +1582,212 @@ function renderCuadreTabla(){
       ${gastosPeriodo.slice().reverse().map(g=>`<tr><td>${fmtDate(g.fecha)}</td><td>${esc(g.descripcion)}</td><td>${g.rutaId?esc(rutaDe(g.rutaId)?.nombre||'—'):'General'}</td><td class="num">${fmtMoney(g.monto)}</td><td>${esAdmin()?`<button class="btn peligro chico" onclick="borrarGasto('${g.id}')">Eliminar</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="vacio">No se han registrado gastos en este periodo.</div>'}
   `;
+}
+
+/* ======================================================================
+   REPORTES: listados filtrables de préstamos, clientes, abonos, gastos y
+   rendimiento por ruta — cada uno se puede ver en pantalla, exportar a
+   CSV/Excel o imprimir/guardar en PDF.
+====================================================================== */
+let tipoReporteActual = 'prestamos';
+let ultimoReporte = null; // { titulo, encabezados, filasCSV } — lo que se ve ahora en pantalla
+const TIPOS_REPORTE = [
+  ['prestamos', '🧾 Préstamos'],
+  ['clientes', '📇 Clientes'],
+  ['abonos', '💵 Abonos'],
+  ['gastos', '➖ Gastos'],
+  ['rendimiento', '📈 Rendimiento por ruta']
+];
+function renderReportes(el){
+  el.innerHTML = `
+    <div class="encab-vista"><h2>📊 Reportes</h2></div>
+    <div class="fila" style="flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${TIPOS_REPORTE.map(([id,lbl])=>`<button class="btn ${tipoReporteActual===id?'':'secundario'} chico" onclick="cambiarTipoReporte('${id}')">${lbl}</button>`).join('')}
+    </div>
+    <div id="reporte-filtros" class="card"></div>
+    <div id="reporte-resultado" style="margin-top:14px;"></div>
+  `;
+  renderFiltrosReporte();
+}
+function cambiarTipoReporte(id){
+  tipoReporteActual = id;
+  renderReportes(document.getElementById('vista-reportes'));
+}
+function renderFiltrosReporte(){
+  const misRutas = rutasDelUsuario();
+  const hoy = todayStr();
+  const opcionesRuta = `<option value="">Todas las rutas</option>` + misRutas.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join('');
+  const mostrarFechas = tipoReporteActual !== 'clientes';
+  let extra = '';
+  if(tipoReporteActual==='prestamos'){
+    extra = `<div class="campo"><label>Estado</label>
+      <select id="rep-estado" onchange="generarReporte()">
+        <option value="">Todos</option>
+        <option value="pendiente">Pendiente de aprobación</option>
+        <option value="activo">Activo</option>
+        <option value="mora">En mora</option>
+        <option value="pagado">Pagado</option>
+        <option value="rechazado">Rechazado</option>
+        <option value="cancelado">Cancelado</option>
+      </select></div>`;
+  }else if(tipoReporteActual==='clientes'){
+    extra = `<div class="campo"><label>Con préstamo</label>
+      <select id="rep-conprestamo" onchange="generarReporte()">
+        <option value="">Todos los clientes</option>
+        <option value="si">Con préstamo activo o en mora</option>
+        <option value="no">Sin préstamo activo</option>
+      </select></div>`;
+  }
+  document.getElementById('reporte-filtros').innerHTML = `
+    <div class="fila" style="flex-wrap:wrap;">
+      ${mostrarFechas ? `
+      <div class="campo"><label>Desde</label><input type="date" id="rep-desde" value="${sumarDias(hoy,-30)}" onchange="generarReporte()"></div>
+      <div class="campo"><label>Hasta</label><input type="date" id="rep-hasta" value="${hoy}" onchange="generarReporte()"></div>` : ''}
+      <div class="campo"><label>Ruta</label><select id="rep-ruta" onchange="generarReporte()">${opcionesRuta}</select></div>
+      ${extra}
+    </div>
+  `;
+  generarReporte();
+}
+function generarReporte(){
+  if(tipoReporteActual==='prestamos') return reportePrestamos();
+  if(tipoReporteActual==='clientes') return reporteClientes();
+  if(tipoReporteActual==='abonos') return reporteAbonos();
+  if(tipoReporteActual==='gastos') return reporteGastos();
+  if(tipoReporteActual==='rendimiento') return reporteRendimiento();
+}
+function pintarReporte(titulo, encabezados, filasHtml, filasCSV){
+  ultimoReporte = { titulo, encabezados, filasCSV };
+  document.getElementById('reporte-resultado').innerHTML = `
+    <div class="encab-vista">
+      <h3 style="margin:0;">${esc(titulo)} <span style="font-size:12.5px;color:var(--ink-soft);font-weight:400;">(${filasCSV.length} resultado${filasCSV.length===1?'':'s'})</span></h3>
+      <div class="fila">
+        <button class="btn secundario chico" onclick="exportarReporteCSV()">⬇️ Exportar CSV</button>
+        <button class="btn secundario chico" onclick="imprimirReporte()">🖨️ Imprimir</button>
+      </div>
+    </div>
+    <div class="tblwrap"><table><thead><tr>${encabezados.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${filasHtml.length? filasHtml.map(f=>`<tr>${f.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${encabezados.length}"><div class="vacio">Sin resultados para estos filtros.</div></td></tr>`}</tbody>
+    </table></div>
+  `;
+}
+function exportarReporteCSV(){
+  if(!ultimoReporte) return;
+  const nombre = 'reporte_'+ultimoReporte.titulo.toLowerCase().replace(/[^a-z0-9]+/g,'_')+'_'+todayStr()+'.csv';
+  descargarArchivo(nombre, filasACSV(ultimoReporte.encabezados, ultimoReporte.filasCSV), 'text/csv');
+  toast('Reporte exportado a CSV.');
+}
+function imprimirReporte(){
+  if(!ultimoReporte) return;
+  const filasHtml = ultimoReporte.filasCSV.map(f=>`<tr>${f.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('');
+  imprimirHTML(`
+    <h2 style="margin:0 0 4px;">${esc(DB.empresa.nombre||'ER TOOL')}</h2>
+    <h3 style="margin:0 0 10px;">${esc(ultimoReporte.titulo)} — ${fmtDate(todayStr())}</h3>
+    <table><thead><tr>${ultimoReporte.encabezados.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${filasHtml}</tbody></table>
+  `);
+}
+function reportePrestamos(){
+  const desde = document.getElementById('rep-desde').value;
+  const hasta = document.getElementById('rep-hasta').value;
+  const rutaId = document.getElementById('rep-ruta').value;
+  const estadoF = document.getElementById('rep-estado').value;
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = esAdmin() ? DB.prestamos.slice() : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
+  if(rutaId) lista = lista.filter(p=>p.rutaId===rutaId);
+  if(desde) lista = lista.filter(p=>p.fechaInicio>=desde);
+  if(hasta) lista = lista.filter(p=>p.fechaInicio<=hasta);
+  if(estadoF) lista = lista.filter(p=>estadoPrestamo(p)===estadoF);
+  lista.sort((a,b)=> a.fechaInicio<b.fechaInicio?1:(a.fechaInicio>b.fechaInicio?-1:0));
+  const encabezados = ['Fecha','Cliente','Cédula','Ruta','Monto','Total a pagar','Saldo','Estado','Solicitado por'];
+  const filasCSV = lista.map(p=>{
+    const c = clienteDe(p.clienteId);
+    return [p.fechaInicio, c?.nombre||'', c?.cedula||'', rutaDe(p.rutaId)?.nombre||'', p.monto, totalAPagar(p), saldoPrestamo(p), estadoPrestamo(p), usuarioDe(p.creadoPor)?.nombre||''];
+  });
+  const filasHtml = lista.map(p=>{
+    const c = clienteDe(p.clienteId);
+    const est = estadoPrestamo(p);
+    const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='pendiente'?'pend':(est==='rechazado'?'mora':(est==='cancelado'?'pend':'ok'))));
+    return [fmtDate(p.fechaInicio), `<a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a>`, esc(c?.cedula||'—'), esc(rutaDe(p.rutaId)?.nombre||'—'), fmtMoney(p.monto), fmtMoney(totalAPagar(p)), fmtMoney(saldoPrestamo(p)), `<span class="pill ${pillClass}">${est}</span>`, esc(usuarioDe(p.creadoPor)?.nombre||'—')];
+  });
+  pintarReporte('Préstamos', encabezados, filasHtml, filasCSV);
+}
+function reporteClientes(){
+  const rutaId = document.getElementById('rep-ruta').value;
+  const conPrestamo = document.getElementById('rep-conprestamo').value;
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = esAdmin() ? DB.clientes.slice() : DB.clientes.filter(c=>idsRuta.includes(c.rutaId));
+  if(rutaId) lista = lista.filter(c=>c.rutaId===rutaId);
+  const tieneActivo = c => DB.prestamos.some(p=>p.clienteId===c.id && (estadoPrestamo(p)==='activo'||estadoPrestamo(p)==='mora'));
+  if(conPrestamo==='si') lista = lista.filter(tieneActivo);
+  if(conPrestamo==='no') lista = lista.filter(c=>!tieneActivo(c));
+  lista.sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const encabezados = ['Nombre','Cédula','Teléfono','Ruta','Dirección','KYC completo','Préstamo activo'];
+  const filasCSV = lista.map(c=>[c.nombre||'', c.cedula||'', c.telefono||'', rutaDe(c.rutaId)?.nombre||'', c.direccion||'', (c.fotoCedula&&c.fotoSelfie)?'sí':'no', tieneActivo(c)?'sí':'no']);
+  const filasHtml = lista.map(c=>[`<a href="#" onclick="verHistorialCliente('${c.id}');return false;">${esc(c.nombre)}</a>`, esc(c.cedula), esc(c.telefono||'—'), esc(rutaDe(c.rutaId)?.nombre||'—'), esc(c.direccion||'—'), (c.fotoCedula&&c.fotoSelfie)?'<span class="pill ok">Sí</span>':'<span class="pill warn">Falta</span>', tieneActivo(c)?'<span class="pill ok">Sí</span>':'—']);
+  pintarReporte('Clientes', encabezados, filasHtml, filasCSV);
+}
+function reporteAbonos(){
+  const desde = document.getElementById('rep-desde').value;
+  const hasta = document.getElementById('rep-hasta').value;
+  const rutaId = document.getElementById('rep-ruta').value;
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const prestamosVisibles = esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
+  const idsPrestamoVisibles = prestamosVisibles.map(p=>p.id);
+  let lista = DB.abonos.filter(a=>idsPrestamoVisibles.includes(a.prestamoId));
+  if(desde) lista = lista.filter(a=>a.fecha>=desde);
+  if(hasta) lista = lista.filter(a=>a.fecha<=hasta);
+  if(rutaId) lista = lista.filter(a=>{ const p=prestamoDe(a.prestamoId); return p && p.rutaId===rutaId; });
+  lista.sort((a,b)=> a.fecha<b.fecha?1:(a.fecha>b.fecha?-1:0));
+  const encabezados = ['Fecha','Cliente','Ruta','Monto','Tipo','Cobrador'];
+  const filasCSV = lista.map(a=>{
+    const p = prestamoDe(a.prestamoId); const c = p?clienteDe(p.clienteId):null;
+    return [a.fecha, c?.nombre||'', p?(rutaDe(p.rutaId)?.nombre||''):'', a.monto, a.tipo||'abono', usuarioDe(a.cobradorId)?.nombre||''];
+  });
+  const filasHtml = lista.map(a=>{
+    const p = prestamoDe(a.prestamoId); const c = p?clienteDe(p.clienteId):null;
+    return [fmtDate(a.fecha), esc(c?.nombre||'—'), esc(p?(rutaDe(p.rutaId)?.nombre||'—'):'—'), fmtMoney(a.monto), a.tipo==='renovacion'?'<span class="pill pend">Renovación</span>':'Abono', esc(usuarioDe(a.cobradorId)?.nombre||'—')];
+  });
+  const totalAbonos = lista.reduce((s,a)=>s+Number(a.monto||0),0);
+  pintarReporte('Abonos — total '+fmtMoney(totalAbonos), encabezados, filasHtml, filasCSV);
+}
+function reporteGastos(){
+  const desde = document.getElementById('rep-desde').value;
+  const hasta = document.getElementById('rep-hasta').value;
+  const rutaId = document.getElementById('rep-ruta').value;
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let lista = (DB.gastos||[]).filter(g => esAdmin() || (g.rutaId && idsRuta.includes(g.rutaId)));
+  if(desde) lista = lista.filter(g=>g.fecha>=desde);
+  if(hasta) lista = lista.filter(g=>g.fecha<=hasta);
+  if(rutaId) lista = lista.filter(g=>g.rutaId===rutaId);
+  lista.sort((a,b)=> a.fecha<b.fecha?1:(a.fecha>b.fecha?-1:0));
+  const encabezados = ['Fecha','Descripción','Ruta','Valor','Registrado por'];
+  const filasCSV = lista.map(g=>[g.fecha, g.descripcion, g.rutaId?(rutaDe(g.rutaId)?.nombre||''):'General', g.monto, usuarioDe(g.registradoPor)?.nombre||'']);
+  const filasHtml = lista.map(g=>[fmtDate(g.fecha), esc(g.descripcion), g.rutaId?esc(rutaDe(g.rutaId)?.nombre||'—'):'General', fmtMoney(g.monto), esc(usuarioDe(g.registradoPor)?.nombre||'—')]);
+  const totalGastos = lista.reduce((s,g)=>s+Number(g.monto||0),0);
+  pintarReporte('Gastos — total '+fmtMoney(totalGastos), encabezados, filasHtml, filasCSV);
+}
+function reporteRendimiento(){
+  const desde = document.getElementById('rep-desde').value;
+  const hasta = document.getElementById('rep-hasta').value;
+  const rutaId = document.getElementById('rep-ruta').value;
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  let rutas = esAdmin() ? DB.rutas.slice() : DB.rutas.filter(r=>idsRuta.includes(r.id));
+  if(rutaId) rutas = rutas.filter(r=>r.id===rutaId);
+  const filas = rutas.map(r=>{
+    const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
+    const idsP = prestamosRuta.map(p=>p.id);
+    const prestado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta && p.estadoAprobacion!=='pendiente' && p.estadoAprobacion!=='rechazado').reduce((s,p)=>s+Number(p.monto||0),0);
+    const recaudado = DB.abonos.filter(a=>idsP.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
+    const gastosRuta = (DB.gastos||[]).filter(g=>g.rutaId===r.id && g.fecha>=desde && g.fecha<=hasta).reduce((s,g)=>s+Number(g.monto||0),0);
+    const activos = prestamosRuta.filter(p=>{ const e=estadoPrestamo(p); return e==='activo'||e==='mora'; });
+    const enMora = activos.filter(p=>estadoPrestamo(p)==='mora');
+    const carteraActiva = activos.reduce((s,p)=>s+saldoPrestamo(p),0);
+    return { nombre:r.nombre, prestado, recaudado, gastos:gastosRuta, neto:recaudado-prestado-gastosRuta, activos:activos.length, enMora:enMora.length, carteraActiva };
+  });
+  const encabezados = ['Ruta','Prestado','Recaudado','Gastos','Neto','Préstamos activos','En mora','Cartera activa'];
+  const filasCSV = filas.map(f=>[f.nombre, f.prestado, f.recaudado, f.gastos, f.neto, f.activos, f.enMora, f.carteraActiva]);
+  const filasHtml = filas.map(f=>[esc(f.nombre), fmtMoney(f.prestado), fmtMoney(f.recaudado), fmtMoney(f.gastos), fmtMoney(f.neto), f.activos, f.enMora>0?`<span class="pill mora">${f.enMora}</span>`:'0', fmtMoney(f.carteraActiva)]);
+  pintarReporte('Rendimiento por ruta', encabezados, filasHtml, filasCSV);
 }
 
 /* ======================================================================
