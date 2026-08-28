@@ -1,0 +1,1104 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>ER TOOL</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#ffffff; --ink:#1c2333; --ink-soft:#5b6274; --line:#e3e5ea;
+    --accent:#0f6e4f; --accent-ink:#ffffff; --accent-soft:#e3f3ec;
+    --warn:#b3401f; --warn-soft:#fdeae3; --ok:#0f6e4f; --ok-soft:#e3f3ec;
+    --mora:#9a3e2e; --mora-soft:#f6e2dc; --pend:#8a6d1a; --pend-soft:#f7edd2;
+    --shadow: 0 1px 2px rgba(20,25,40,.06), 0 6px 18px rgba(20,25,40,.07);
+    --radius: 10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+    font-size:15px; line-height:1.45; -webkit-tap-highlight-color:transparent;
+  }
+  button, input, select, textarea{ font-family:inherit; font-size:inherit; }
+  h1,h2,h3,h4{ margin:0 0 8px; }
+  a{ color:var(--accent); }
+  .hidden{ display:none !important; }
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px;
+    padding:10px 16px; font-weight:600; cursor:pointer; line-height:1.2;
+  }
+  .btn:active{ opacity:.85; }
+  .btn.secundario{ background:var(--panel); color:var(--ink); border:1px solid var(--line); }
+  .btn.peligro{ background:var(--warn); }
+  .btn.chico{ padding:6px 10px; font-size:13px; border-radius:6px; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  input[type=text], input[type=password], input[type=number], input[type=date], input[type=tel], input[type=email], select, textarea{
+    width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink);
+  }
+  label{ display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:10px 0 4px; }
+  .campo{ margin-bottom:4px; }
+  .fila{ display:flex; gap:10px; flex-wrap:wrap; }
+  .fila > *{ flex:1; min-width:140px; }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .pill{ display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:700; letter-spacing:.02em; text-transform:uppercase; padding:3px 9px; border-radius:99px; }
+  .pill.ok{ background:var(--ok-soft); color:var(--ok); }
+  .pill.warn{ background:var(--warn-soft); color:var(--warn); }
+  .pill.mora{ background:var(--mora-soft); color:var(--mora); }
+  .pill.pend{ background:var(--pend-soft); color:var(--pend); }
+
+  /* ---- pantallas iniciales ---- */
+  .pantalla-centro{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .caja-login{ width:100%; max-width:380px; }
+  .caja-login .logo{ text-align:center; margin-bottom:18px; }
+  .caja-login .logo .nombre{ font-weight:800; font-size:26px; letter-spacing:-.01em; }
+  .caja-login .logo .sub{ color:var(--ink-soft); font-size:13px; }
+  .error-txt{ color:var(--warn); font-size:13px; margin-top:8px; min-height:16px; }
+
+  /* ---- shell principal ---- */
+  #app-shell{ display:none; min-height:100vh; }
+  #app-shell.activo{ display:flex; flex-direction:column; }
+  header.topbar{
+    background:var(--panel); border-bottom:1px solid var(--line); padding:10px 14px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:20;
+  }
+  header.topbar .marca{ font-weight:800; font-size:17px; display:flex; align-items:center; gap:6px; }
+  header.topbar .empresa-nombre{ font-size:12px; color:var(--ink-soft); }
+  header.topbar .usr{ display:flex; align-items:center; gap:10px; font-size:13px; }
+  nav.tabs{
+    display:flex; gap:2px; overflow-x:auto; background:var(--panel); border-bottom:1px solid var(--line);
+    position:sticky; top:49px; z-index:19; padding:0 6px;
+  }
+  nav.tabs button{
+    background:none; border:none; padding:11px 13px; font-size:13px; font-weight:600; color:var(--ink-soft);
+    cursor:pointer; white-space:nowrap; border-bottom:3px solid transparent;
+  }
+  nav.tabs button.activo{ color:var(--accent); border-bottom-color:var(--accent); }
+  main{ flex:1; padding:14px; max-width:980px; width:100%; margin:0 auto; }
+  .vista{ display:none; }
+  .vista.activa{ display:block; }
+  .encab-vista{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .encab-vista h2{ font-size:19px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  th,td{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th{ font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); }
+  .tblwrap{ overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); }
+  .num{ font-variant-numeric: tabular-nums; text-align:right; }
+  tr.fila-clic{ cursor:pointer; }
+  tr.fila-clic:hover{ background:#fafbfc; }
+
+  .grid-stats{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; }
+  .grid-stats .stat{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
+  .grid-stats .stat .n{ font-size:22px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .grid-stats .stat .l{ font-size:11.5px; color:var(--ink-soft); margin-top:2px; }
+
+  .modal-fondo{
+    position:fixed; inset:0; background:rgba(20,25,40,.45); display:flex; align-items:flex-end;
+    justify-content:center; z-index:100; padding:0;
+  }
+  @media (min-width:640px){ .modal-fondo{ align-items:center; padding:20px; } }
+  .modal{
+    background:var(--panel); width:100%; max-width:560px; max-height:92vh; overflow-y:auto;
+    border-radius:14px 14px 0 0; padding:18px;
+  }
+  @media (min-width:640px){ .modal{ border-radius:14px; } }
+  .modal h3{ font-size:16.5px; }
+  .modal .cerrar{ position:absolute; top:14px; right:16px; background:none; border:none; font-size:20px; color:var(--ink-soft); cursor:pointer; }
+  .modal-wrap{ position:relative; }
+  .acciones-modal{ display:flex; gap:8px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap; }
+
+  .foto-kyc{ display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; }
+  .foto-kyc .slot{
+    width:120px; height:90px; border:1.5px dashed var(--line); border-radius:8px; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:4px; font-size:11px; color:var(--ink-soft); position:relative; overflow:hidden;
+    background:#fafbfc; cursor:pointer;
+  }
+  .foto-kyc .slot img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .foto-kyc .slot input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+
+  .toast{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1c2333; color:#fff;
+    padding:10px 18px; border-radius:8px; font-size:13.5px; z-index:200; box-shadow:var(--shadow); max-width:90vw; text-align:center;
+  }
+
+  .vacio{ text-align:center; padding:36px 14px; color:var(--ink-soft); }
+
+  /* recibo imprimible */
+  #recibo-imprimible{ display:none; }
+  @media print{
+    body *{ visibility:hidden; }
+    #recibo-imprimible, #recibo-imprimible *{ visibility:visible; }
+    #recibo-imprimible{ display:block; position:absolute; top:0; left:0; width:80mm; padding:6px; font-family:'Courier New',monospace; font-size:12px; }
+  }
+  .recibo-preview{ font-family:'Courier New',monospace; font-size:12.5px; background:#fafbfc; border:1px dashed var(--line); border-radius:8px; padding:12px; white-space:pre-wrap; }
+
+  .rol-badge{ font-size:10.5px; padding:2px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:700; text-transform:uppercase; }
+
+  footer.pie-app{ text-align:center; font-size:11.5px; color:var(--ink-soft); padding:16px; }
+</style>
+</head>
+<body>
+
+<!-- ============ PANTALLA: SIN EMPRESA (link raíz) ============ -->
+<div id="pantalla-sin-empresa" class="pantalla-centro hidden">
+  <div class="caja-login card">
+    <div class="logo"><div class="nombre">🧰 ER TOOL</div><div class="sub">Control de préstamos diarios por ruta</div></div>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Este enlace no tiene una empresa asociada. Pide a quien te dio acceso el link completo de tu empresa (algo como <code>?empresa=tu-negocio</code>), o si eres soporte, entra al panel de soporte.</p>
+    <button class="btn secundario" style="width:100%;margin-top:8px" onclick="location.search='?empresa=_soporte'">Entrar como soporte</button>
+  </div>
+</div>
+
+<!-- ============ PANTALLA: LICENCIA VENCIDA / EMPRESA INACTIVA ============ -->
+<div id="pantalla-licencia" class="pantalla-centro hidden">
+  <div class="caja-login card">
+    <div class="logo"><div class="nombre">🧰 ER TOOL</div><div class="sub" id="lic-empresa-nombre">—</div></div>
+    <div id="lic-mensaje" style="font-size:14px;"></div>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin-top:14px;">Contacta a soporte para activar o renovar el acceso de esta empresa.</p>
+    <button class="btn secundario" style="width:100%;margin-top:6px" onclick="verificarLicenciaYArrancar()">Reintentar</button>
+  </div>
+</div>
+
+<!-- ============ PANTALLA: LOGIN NORMAL (empresa) ============ -->
+<div id="pantalla-login" class="pantalla-centro hidden">
+  <div class="caja-login card">
+    <div class="logo"><div class="nombre">🧰 ER TOOL</div><div class="sub" id="login-empresa-nombre">—</div></div>
+    <div class="campo"><label>Usuario</label><input type="text" id="login-usuario" autocomplete="username"></div>
+    <div class="campo"><label>Clave</label><input type="password" id="login-clave" autocomplete="current-password"></div>
+    <button class="btn" style="width:100%;margin-top:12px" onclick="intentarLogin()">Entrar</button>
+    <div class="error-txt" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ============ PANEL DE SOPORTE (control de empresas) ============ -->
+<div id="pantalla-soporte-login" class="pantalla-centro hidden">
+  <div class="caja-login card">
+    <div class="logo"><div class="nombre">🛠️ Panel de soporte</div><div class="sub">ER TOOL</div></div>
+    <div class="campo"><label>Clave maestra de soporte</label><input type="password" id="soporte-clave"></div>
+    <button class="btn" style="width:100%;margin-top:12px" onclick="entrarSoporte()">Entrar</button>
+    <div class="error-txt" id="soporte-login-error"></div>
+  </div>
+</div>
+
+<div id="panel-soporte" class="hidden">
+  <header class="topbar">
+    <div class="marca">🛠️ Panel de soporte — ER TOOL</div>
+    <div class="usr"><button class="btn secundario chico" onclick="salirSoporte()">Salir</button></div>
+  </header>
+  <main>
+    <div class="encab-vista">
+      <h2>Empresas</h2>
+      <button class="btn" onclick="abrirModalCrearEmpresa()">+ Crear empresa</button>
+    </div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Empresa</th><th>Código (slug)</th><th>Estado</th><th>Vence</th><th></th></tr></thead>
+        <tbody id="tbody-empresas"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- ============ SHELL PRINCIPAL DE LA APP ============ -->
+<div id="app-shell">
+  <header class="topbar">
+    <div>
+      <div class="marca">🧰 ER TOOL</div>
+      <div class="empresa-nombre" id="topbar-empresa">—</div>
+    </div>
+    <div class="usr">
+      <span id="topbar-usuario">—</span>
+      <span class="rol-badge" id="topbar-rol">—</span>
+      <button class="btn secundario chico" onclick="cerrarSesion()">Salir</button>
+    </div>
+  </header>
+  <nav class="tabs" id="tabs-nav"></nav>
+  <main>
+    <div class="vista" id="vista-inicio"></div>
+    <div class="vista" id="vista-rutas"></div>
+    <div class="vista" id="vista-clientes"></div>
+    <div class="vista" id="vista-prestamos"></div>
+    <div class="vista" id="vista-cuadre"></div>
+    <div class="vista" id="vista-usuarios"></div>
+  </main>
+  <footer class="pie-app">ER TOOL · <span id="pie-empresa"></span></footer>
+</div>
+
+<div id="modal-host"></div>
+<div id="recibo-imprimible"></div>
+
+<script>
+/* ======================================================================
+   ER TOOL — control de préstamos diarios por ruta
+   Arquitectura: una sola página, multi-empresa vía ?empresa=slug (igual
+   que ER Mobile Pro). Cada empresa guarda su propio bloque de datos en
+   el backend (/api/db?empresa=slug). La activación/tiempo de acceso de
+   cada empresa la controla el backend (registro central), no una clave
+   firmada local — así soporte puede activar/extender/bloquear una
+   empresa al instante desde el Panel de Soporte, sin tener que generar
+   ni repartir claves.
+====================================================================== */
+
+const EMPRESA_SLUG = new URLSearchParams(location.search).get('empresa') || '';
+const ES_SOPORTE_SLUG = EMPRESA_SLUG === '_soporte';
+
+let DB = null;
+let currentUser = null;
+let vistaActual = 'inicio';
+
+function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fmtDate(s){ if(!s) return '-'; const [y,m,d]=s.split('-'); return d+'/'+m+'/'+y; }
+function fmtMoney(n){ n = Math.round(Number(n)||0); return '$' + n.toLocaleString('es-CO'); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function uid(pref){ return pref+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function toast(msg){
+  const t = document.createElement('div'); t.className='toast'; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(), 3200);
+}
+function sumarDias(fechaStr, dias){
+  const d = new Date(fechaStr+'T00:00:00'); d.setDate(d.getDate()+dias);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function diffDias(a,b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
+function inicioSemana(fechaStr){ const d=new Date(fechaStr+'T00:00:00'); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function inicioMes(fechaStr){ return fechaStr.slice(0,7)+'-01'; }
+
+/* ---------------------------------------------------------------------
+   Estructura por defecto de una empresa nueva
+--------------------------------------------------------------------- */
+function defaultDB(){
+  return {
+    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos' }, // diasCobro: 'todos' | 'lunSab'
+    usuarios: [
+      { id:'u_soporte', usuario:'soporte', claveHash: hashClave('cambiar-esta-clave'), rol:'soporte', nombre:'Soporte Técnico', protegido:true },
+      { id:'u_admin_demo', usuario:'admin', claveHash: hashClave('admin123'), rol:'admin', nombre:'Administrador', activo:true }
+    ],
+    rutas: [],
+    clientes: [],
+    prestamos: [],
+    abonos: [],
+    instalacionId: uid('inst')
+  };
+}
+
+/* hash simple del lado cliente para no guardar claves en texto plano.
+   OJO: esto NO es seguridad criptográfica fuerte (es un hash reversible-
+   resistente pero corre en el navegador); es el mismo nivel de protección
+   que ya usa ER Mobile Pro. Para más seguridad, la validación real de
+   claves debería mudarse al backend en una futura versión. */
+function hashClave(clave){
+  let h1 = 0x9e3779b9, h2 = 0x85ebca6b;
+  const str = 'ertool-sal::' + clave;
+  for(let i=0;i<str.length;i++){
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+  return (4294967296*(2097151 & h2) + (h1>>>0)).toString(36);
+}
+
+/* ---------------------------------------------------------------------
+   Carga / guardado remoto (por empresa)
+--------------------------------------------------------------------- */
+let guardando = false, pendienteGuardar = false;
+async function cargarDB(){
+  const res = await fetch('/api/db?empresa='+encodeURIComponent(EMPRESA_SLUG), { cache:'no-store' });
+  if(res.status === 404){ const e = new Error('EMPRESA_NO_EXISTE'); e.tipo='EMPRESA_NO_EXISTE'; throw e; }
+  if(!res.ok) throw new Error('No se pudo cargar la empresa');
+  const datos = await res.json();
+  DB = Object.assign(defaultDB(), datos);
+  try{ localStorage.setItem('ertool_cache_'+EMPRESA_SLUG, JSON.stringify(DB)); }catch(e){}
+}
+async function guardarDB(){
+  try{ localStorage.setItem('ertool_cache_'+EMPRESA_SLUG, JSON.stringify(DB)); }catch(e){}
+  if(guardando){ pendienteGuardar = true; return; }
+  guardando = true;
+  try{
+    const res = await fetch('/api/db?empresa='+encodeURIComponent(EMPRESA_SLUG), {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(DB)
+    });
+    if(!res.ok) toast('⚠️ No se pudo guardar en el servidor. Tus cambios quedan solo en este dispositivo por ahora.');
+  }catch(e){
+    toast('⚠️ Sin conexión: los cambios se guardaron solo en este dispositivo.');
+  }finally{
+    guardando = false;
+    if(pendienteGuardar){ pendienteGuardar = false; guardarDB(); }
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Arranque
+--------------------------------------------------------------------- */
+window.addEventListener('DOMContentLoaded', arrancar);
+async function arrancar(){
+  if(!EMPRESA_SLUG){
+    document.getElementById('pantalla-sin-empresa').classList.remove('hidden');
+    return;
+  }
+  if(ES_SOPORTE_SLUG){
+    if(sessionStorage.getItem('ertool_soporte_ok') === '1'){ await entrarSoporteDirecto(); }
+    else document.getElementById('pantalla-soporte-login').classList.remove('hidden');
+    return;
+  }
+  await verificarLicenciaYArrancar();
+}
+async function verificarLicenciaYArrancar(){
+  ['pantalla-licencia','pantalla-login','pantalla-sin-empresa'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+  let lic;
+  try{
+    const res = await fetch('/api/licencia?empresa='+encodeURIComponent(EMPRESA_SLUG), { cache:'no-store' });
+    if(res.status === 404){
+      document.getElementById('pantalla-sin-empresa').classList.remove('hidden');
+      return;
+    }
+    lic = await res.json();
+  }catch(e){
+    // sin internet: si hay copia local reciente, deja seguir trabajando offline
+    const cache = localStorage.getItem('ertool_cache_'+EMPRESA_SLUG);
+    if(cache){ DB = JSON.parse(cache); toast('Sin conexión: trabajando con la última copia guardada en este dispositivo.'); mostrarLogin(); return; }
+    document.getElementById('lic-mensaje').innerHTML = 'No hay conexión con el servidor y no hay una copia guardada en este dispositivo.';
+    document.getElementById('pantalla-licencia').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('lic-empresa-nombre').textContent = lic.nombre || EMPRESA_SLUG;
+  if(!lic.activa){
+    document.getElementById('lic-mensaje').innerHTML = lic.permanente===false && lic.vence
+      ? `Esta empresa venció el <b>${fmtDate(lic.vence)}</b>.`
+      : 'Esta empresa está desactivada.';
+    document.getElementById('pantalla-licencia').classList.remove('hidden');
+    return;
+  }
+  try{ await cargarDB(); }catch(e){
+    document.getElementById('lic-mensaje').innerHTML = 'No se pudo cargar la información de la empresa.';
+    document.getElementById('pantalla-licencia').classList.remove('hidden');
+    return;
+  }
+  mostrarLogin();
+}
+function mostrarLogin(){
+  document.getElementById('login-empresa-nombre').textContent = DB.empresa.nombre || EMPRESA_SLUG;
+  const sesion = sessionStorage.getItem('ertool_sesion_'+EMPRESA_SLUG);
+  if(sesion){
+    const u = DB.usuarios.find(x=>x.id===sesion);
+    if(u){ currentUser = u; iniciarApp(); return; }
+  }
+  document.getElementById('pantalla-login').classList.remove('hidden');
+}
+function intentarLogin(){
+  const usuario = document.getElementById('login-usuario').value.trim();
+  const clave = document.getElementById('login-clave').value;
+  const err = document.getElementById('login-error');
+  const u = DB.usuarios.find(x=>x.usuario.toLowerCase()===usuario.toLowerCase());
+  if(!u || u.claveHash !== hashClave(clave) || u.activo===false){ err.textContent='Usuario o clave incorrectos.'; return; }
+  currentUser = u;
+  sessionStorage.setItem('ertool_sesion_'+EMPRESA_SLUG, u.id);
+  document.getElementById('pantalla-login').classList.add('hidden');
+  err.textContent='';
+  iniciarApp();
+}
+function cerrarSesion(){
+  sessionStorage.removeItem('ertool_sesion_'+EMPRESA_SLUG);
+  location.reload();
+}
+
+/* ---------------------------------------------------------------------
+   Permisos por rol
+--------------------------------------------------------------------- */
+function esAdmin(){ return currentUser && (currentUser.rol==='admin' || currentUser.rol==='soporte'); }
+function esCobrador(){ return currentUser && currentUser.rol==='cobrador'; }
+function rutasDelUsuario(){
+  if(esAdmin()) return DB.rutas;
+  return DB.rutas.filter(r => (r.cobradores||[]).includes(currentUser.id));
+}
+
+const PESTANIAS = [
+  { id:'inicio', label:'Inicio', render: renderInicio, ver: ()=>true },
+  { id:'prestamos', label:'Préstamos', render: renderPrestamos, ver: ()=>true },
+  { id:'clientes', label:'Clientes', render: renderClientes, ver: ()=>true },
+  { id:'rutas', label:'Rutas', render: renderRutas, ver: esAdmin },
+  { id:'cuadre', label:'Cuadre de caja', render: renderCuadre, ver: ()=>true },
+  { id:'usuarios', label:'Usuarios', render: renderUsuarios, ver: esAdmin }
+];
+
+function iniciarApp(){
+  document.getElementById('app-shell').classList.add('activo');
+  document.getElementById('topbar-empresa').textContent = DB.empresa.nombre || EMPRESA_SLUG;
+  document.getElementById('pie-empresa').textContent = DB.empresa.nombre || EMPRESA_SLUG;
+  document.getElementById('topbar-usuario').textContent = currentUser.nombre;
+  document.getElementById('topbar-rol').textContent = currentUser.rol;
+  const nav = document.getElementById('tabs-nav');
+  nav.innerHTML = PESTANIAS.filter(p=>p.ver()).map(p=>`<button data-tab="${p.id}" onclick="irVista('${p.id}')">${esc(p.label)}</button>`).join('');
+  irVista('inicio');
+}
+function irVista(id){
+  vistaActual = id;
+  document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('activo', b.dataset.tab===id));
+  document.querySelectorAll('main .vista').forEach(v=>v.classList.remove('activa'));
+  const el = document.getElementById('vista-'+id);
+  el.classList.add('activa');
+  const pest = PESTANIAS.find(p=>p.id===id);
+  if(pest) pest.render(el);
+}
+function refrescarVistaActual(){ irVista(vistaActual); }
+
+/* ======================================================================
+   MODALES
+====================================================================== */
+function abrirModal(html){
+  document.getElementById('modal-host').innerHTML = `<div class="modal-fondo" onclick="if(event.target===this) cerrarModal()"><div class="modal-wrap"><div class="modal">${html}</div></div></div>`;
+}
+function cerrarModal(){ document.getElementById('modal-host').innerHTML=''; }
+
+/* ======================================================================
+   INICIO (resumen del día)
+====================================================================== */
+function renderInicio(el){
+  const hoy = todayStr();
+  const misRutas = rutasDelUsuario();
+  const idsRuta = misRutas.map(r=>r.id);
+  const prestamosVisibles = esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
+  const abonosHoy = DB.abonos.filter(a => a.fecha===hoy && (esAdmin() || idsRuta.includes(prestamoDe(a.prestamoId)?.rutaId)));
+  const desembolsosHoy = prestamosVisibles.filter(p=>p.fechaInicio===hoy);
+  const recaudadoHoy = abonosHoy.reduce((s,a)=>s+Number(a.monto||0),0);
+  const desembolsadoHoy = desembolsosHoy.reduce((s,p)=>s+Number(p.monto||0),0);
+  const activos = prestamosVisibles.filter(p=>estadoPrestamo(p)==='activo' || estadoPrestamo(p)==='mora');
+  const enMora = prestamosVisibles.filter(p=>estadoPrestamo(p)==='mora');
+
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Hoy — ${fmtDate(hoy)}</h2></div>
+    <div class="grid-stats">
+      <div class="stat"><div class="n">${fmtMoney(recaudadoHoy)}</div><div class="l">recaudado hoy</div></div>
+      <div class="stat"><div class="n">${fmtMoney(desembolsadoHoy)}</div><div class="l">prestado hoy</div></div>
+      <div class="stat"><div class="n">${activos.length}</div><div class="l">préstamos activos</div></div>
+      <div class="stat"><div class="n" style="color:${enMora.length?'var(--mora)':'inherit'}">${enMora.length}</div><div class="l">en mora</div></div>
+    </div>
+    <div class="card">
+      <h3>Clientes con cuota pendiente hoy</h3>
+      ${renderTablaPendientesHoy(prestamosVisibles)}
+    </div>
+  `;
+}
+function renderTablaPendientesHoy(prestamosVisibles){
+  const hoy = todayStr();
+  const filas = prestamosVisibles
+    .filter(p => estadoPrestamo(p)==='activo' || estadoPrestamo(p)==='mora')
+    .filter(p => p.fechaInicio <= hoy)
+    .map(p=>{
+      const c = clienteDe(p.clienteId);
+      const abonadoHoy = DB.abonos.some(a=>a.prestamoId===p.id && a.fecha===hoy);
+      return {p, c, abonadoHoy};
+    })
+    .sort((a,b)=> (a.abonadoHoy?1:0) - (b.abonadoHoy?1:0));
+  if(!filas.length) return `<div class="vacio">No hay préstamos activos.</div>`;
+  return `<div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th></tr></thead><tbody>
+    ${filas.map(({p,c,abonadoHoy})=>`
+      <tr class="fila-clic" onclick="verPrestamo('${p.id}')">
+        <td>${esc(c?c.nombre:'—')}</td>
+        <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
+        <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
+        <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
+        <td>${abonadoHoy?'<span class="pill ok">Pagó hoy</span>':(estadoPrestamo(p)==='mora'?'<span class="pill mora">Mora</span>':'<span class="pill pend">Pendiente</span>')}</td>
+      </tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+/* ======================================================================
+   RUTAS
+====================================================================== */
+function renderRutas(el){
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Rutas</h2><button class="btn" onclick="formRuta()">+ Nueva ruta</button></div>
+    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th>Cobradores</th><th class="num">Clientes</th><th class="num">Préstamos activos</th><th></th></tr></thead>
+    <tbody>${DB.rutas.length? DB.rutas.map(r=>`
+      <tr>
+        <td>${esc(r.nombre)}</td>
+        <td>${(r.cobradores||[]).map(id=>esc(usuarioDe(id)?.nombre||'?')).join(', ')||'—'}</td>
+        <td class="num">${DB.clientes.filter(c=>c.rutaId===r.id).length}</td>
+        <td class="num">${DB.prestamos.filter(p=>p.rutaId===r.id && (estadoPrestamo(p)==='activo'||estadoPrestamo(p)==='mora')).length}</td>
+        <td><button class="btn secundario chico" onclick="formRuta('${r.id}')">Editar</button></td>
+      </tr>`).join('') : '<tr><td colspan="5"><div class="vacio">No hay rutas todavía.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+function formRuta(id){
+  const r = id ? DB.rutas.find(x=>x.id===id) : null;
+  const cobradores = DB.usuarios.filter(u=>u.rol==='cobrador' || u.rol==='admin');
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>${r?'Editar ruta':'Nueva ruta'}</h3>
+    <div class="campo"><label>Nombre de la ruta</label><input type="text" id="rt-nombre" value="${esc(r?.nombre||'')}"></div>
+    <label>Cobradores asignados</label>
+    <div style="max-height:160px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;">
+      ${cobradores.length? cobradores.map(u=>`
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;font-size:14px;margin:4px 0;">
+          <input type="checkbox" value="${u.id}" ${(r?.cobradores||[]).includes(u.id)?'checked':''} style="width:auto;"> ${esc(u.nombre)} <span class="rol-badge">${u.rol}</span>
+        </label>`).join('') : '<div style="font-size:13px;color:var(--ink-soft)">No hay usuarios cobradores creados aún. Créalos en la pestaña Usuarios.</div>'}
+    </div>
+    <div class="acciones-modal">
+      ${r?`<button class="btn peligro" onclick="borrarRuta('${r.id}')">Eliminar</button>`:''}
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarRuta('${r?r.id:''}')">Guardar</button>
+    </div>
+  `);
+}
+function guardarRuta(id){
+  const nombre = document.getElementById('rt-nombre').value.trim();
+  if(!nombre){ toast('Ponle un nombre a la ruta.'); return; }
+  const cobradores = Array.from(document.querySelectorAll('#modal-host input[type=checkbox]:checked')).map(c=>c.value);
+  if(id){
+    const r = DB.rutas.find(x=>x.id===id); r.nombre = nombre; r.cobradores = cobradores;
+  }else{
+    DB.rutas.push({ id: uid('ruta'), nombre, cobradores });
+  }
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+function borrarRuta(id){
+  if(DB.clientes.some(c=>c.rutaId===id)){ toast('Esta ruta tiene clientes asignados. Reasígnalos antes de eliminarla.'); return; }
+  DB.rutas = DB.rutas.filter(r=>r.id!==id);
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+
+/* ======================================================================
+   CLIENTES (con KYC: foto de cédula + selfie con cédula)
+====================================================================== */
+function renderClientes(el){
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const lista = esAdmin() ? DB.clientes : DB.clientes.filter(c=>idsRuta.includes(c.rutaId));
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Clientes</h2><button class="btn" onclick="formCliente()">+ Nuevo cliente</button></div>
+    <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Cédula</th><th>Teléfono</th><th>Ruta</th><th>KYC</th><th></th></tr></thead>
+    <tbody>${lista.length? lista.map(c=>`
+      <tr>
+        <td>${esc(c.nombre)}</td><td>${esc(c.cedula)}</td><td>${esc(c.telefono)}</td>
+        <td>${esc(rutaDe(c.rutaId)?.nombre||'—')}</td>
+        <td>${c.fotoCedula && c.fotoSelfie? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta foto</span>'}</td>
+        <td><button class="btn secundario chico" onclick="formCliente('${c.id}')">Ver / editar</button></td>
+      </tr>`).join('') : '<tr><td colspan="6"><div class="vacio">No hay clientes todavía.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+function comprimirImagen(file, maxAncho, calidad){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const escala = Math.min(1, maxAncho/img.width);
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(img.width*escala); cv.height = Math.round(img.height*escala);
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+        resolve(cv.toDataURL('image/jpeg', calidad));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function onFotoKyc(input, campo){
+  if(!input.files || !input.files[0]) return;
+  const dataUrl = await comprimirImagen(input.files[0], 900, 0.72);
+  input.closest('.slot').style.backgroundImage = '';
+  const img = input.closest('.slot').querySelector('img') || document.createElement('img');
+  img.src = dataUrl;
+  input.closest('.slot').prepend(img);
+  input.closest('.slot').dataset.valor = dataUrl;
+}
+function formCliente(id){
+  const c = id ? DB.clientes.find(x=>x.id===id) : null;
+  const misRutas = rutasDelUsuario();
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>${c?'Editar cliente':'Nuevo cliente'}</h3>
+    <div class="fila">
+      <div class="campo"><label>Nombre completo</label><input type="text" id="cl-nombre" value="${esc(c?.nombre||'')}"></div>
+      <div class="campo"><label>Cédula</label><input type="text" id="cl-cedula" value="${esc(c?.cedula||'')}"></div>
+    </div>
+    <div class="fila">
+      <div class="campo"><label>Teléfono (WhatsApp)</label><input type="tel" id="cl-telefono" placeholder="3001234567" value="${esc(c?.telefono||'')}"></div>
+      <div class="campo"><label>Ruta</label>
+        <select id="cl-ruta">
+          <option value="">— Sin ruta —</option>
+          ${misRutas.map(r=>`<option value="${r.id}" ${c?.rutaId===r.id?'selected':''}>${esc(r.nombre)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="campo"><label>Dirección</label><input type="text" id="cl-direccion" value="${esc(c?.direccion||'')}"></div>
+    <label>Verificación de identidad (KYC)</label>
+    <p style="font-size:12px;color:var(--ink-soft);margin:0 0 4px;">Toma una foto de la cédula y una selfie de la persona sosteniendo su cédula junto a la cara, para confirmar que el préstamo es a una persona real.</p>
+    <div class="foto-kyc">
+      <div class="slot" id="slot-cedula" data-valor="${c?.fotoCedula?esc(c.fotoCedula):''}">
+        ${c?.fotoCedula?`<img src="${c.fotoCedula}">`:''}
+        <span>📇 Foto de la cédula</span>
+        <input type="file" accept="image/*" capture="environment" onchange="onFotoKyc(this,'cedula')">
+      </div>
+      <div class="slot" id="slot-selfie" data-valor="${c?.fotoSelfie?esc(c.fotoSelfie):''}">
+        ${c?.fotoSelfie?`<img src="${c.fotoSelfie}">`:''}
+        <span>🤳 Selfie con cédula</span>
+        <input type="file" accept="image/*" capture="user" onchange="onFotoKyc(this,'selfie')">
+      </div>
+    </div>
+    <div class="acciones-modal">
+      ${c?`<button class="btn peligro" onclick="borrarCliente('${c.id}')">Eliminar</button>`:''}
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarCliente('${c?c.id:''}')">Guardar</button>
+    </div>
+  `);
+}
+function guardarCliente(id){
+  const nombre = document.getElementById('cl-nombre').value.trim();
+  const cedula = document.getElementById('cl-cedula').value.trim();
+  if(!nombre || !cedula){ toast('Nombre y cédula son obligatorios.'); return; }
+  const datos = {
+    nombre, cedula,
+    telefono: document.getElementById('cl-telefono').value.trim(),
+    rutaId: document.getElementById('cl-ruta').value || null,
+    direccion: document.getElementById('cl-direccion').value.trim(),
+    fotoCedula: document.getElementById('slot-cedula').dataset.valor || null,
+    fotoSelfie: document.getElementById('slot-selfie').dataset.valor || null
+  };
+  if(id){ Object.assign(DB.clientes.find(x=>x.id===id), datos); }
+  else{ DB.clientes.push(Object.assign({id: uid('cli')}, datos)); }
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+function borrarCliente(id){
+  if(DB.prestamos.some(p=>p.clienteId===id)){ toast('Este cliente tiene préstamos registrados. No se puede eliminar.'); return; }
+  DB.clientes = DB.clientes.filter(c=>c.id!==id);
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+
+/* ======================================================================
+   PRÉSTAMOS (cuota fija diaria, estilo "gota a gota")
+====================================================================== */
+function totalAPagar(p){ return Math.round(Number(p.monto||0) * (1 + Number(p.interesPct||0)/100)); }
+function saldoPrestamo(p){
+  const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
+  return Math.max(0, totalAPagar(p) - abonado);
+}
+function estadoPrestamo(p){
+  if(p.cancelado) return 'cancelado';
+  if(saldoPrestamo(p) <= 0) return 'pagado';
+  const hoy = todayStr();
+  if(hoy <= p.fechaInicio) return 'activo';
+  // cuotas que ya deberían haberse pagado desde el inicio hasta hoy
+  const diasTranscurridos = Math.min(p.plazoDias, diffDiasCobro(p, p.fechaInicio, hoy));
+  const esperado = diasTranscurridos * p.cuotaDiaria;
+  const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
+  return abonado + p.cuotaDiaria/2 < esperado ? 'mora' : 'activo'; // margen de media cuota antes de marcar mora
+}
+function diffDiasCobro(p, desde, hasta){
+  // cuenta días de cobro entre dos fechas según config de la empresa (todos los días, o lunes a sábado)
+  let dias = 0; let d = new Date(desde+'T00:00:00'); const fin = new Date(hasta+'T00:00:00');
+  while(d < fin){
+    d.setDate(d.getDate()+1);
+    const esDomingo = d.getDay()===0;
+    if(DB.empresa.diasCobro==='lunSab' && esDomingo) continue;
+    dias++;
+  }
+  return dias;
+}
+function clienteDe(id){ return DB.clientes.find(c=>c.id===id); }
+function rutaDe(id){ return DB.rutas.find(r=>r.id===id); }
+function usuarioDe(id){ return DB.usuarios.find(u=>u.id===id); }
+function prestamoDe(id){ return DB.prestamos.find(p=>p.id===id); }
+
+function renderPrestamos(el){
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const lista = (esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId))).slice().reverse();
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Préstamos</h2><button class="btn" onclick="formPrestamo()">+ Nuevo préstamo</button></div>
+    <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th></tr></thead>
+    <tbody>${lista.length? lista.map(p=>{
+      const est = estadoPrestamo(p);
+      const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='cancelado'?'pend':'ok'));
+      return `<tr class="fila-clic" onclick="verPrestamo('${p.id}')">
+        <td>${esc(clienteDe(p.clienteId)?.nombre||'—')}</td>
+        <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
+        <td class="num">${fmtMoney(p.monto)}</td>
+        <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
+        <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
+        <td><span class="pill ${pillClass}">${est}</span></td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="6"><div class="vacio">No hay préstamos todavía.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+function formPrestamo(){
+  const misRutas = rutasDelUsuario();
+  const clientesDisponibles = esAdmin() ? DB.clientes : DB.clientes.filter(c=>misRutas.some(r=>r.id===c.rutaId));
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Nuevo préstamo</h3>
+    <div class="campo"><label>Cliente</label>
+      <select id="pr-cliente">
+        <option value="">— Selecciona —</option>
+        ${clientesDisponibles.map(c=>`<option value="${c.id}">${esc(c.nombre)} — ${esc(c.cedula)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="fila">
+      <div class="campo"><label>Monto prestado</label><input type="number" id="pr-monto" min="0" step="1000"></div>
+      <div class="campo"><label>Interés total del préstamo (%)</label><input type="number" id="pr-interes" min="0" step="0.5" value="20"></div>
+    </div>
+    <div class="fila">
+      <div class="campo"><label>Plazo (días de cobro)</label><input type="number" id="pr-plazo" min="1" step="1" value="20"></div>
+      <div class="campo"><label>Fecha de inicio</label><input type="date" id="pr-fecha" value="${todayStr()}"></div>
+    </div>
+    <div class="campo"><label>Cuota diaria (se calcula sola, puedes ajustarla)</label><input type="number" id="pr-cuota" min="0" step="500"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarPrestamo()">Crear préstamo</button>
+    </div>
+  `);
+  const recalc = ()=>{
+    const monto = Number(document.getElementById('pr-monto').value||0);
+    const interes = Number(document.getElementById('pr-interes').value||0);
+    const plazo = Number(document.getElementById('pr-plazo').value||1);
+    const total = Math.round(monto*(1+interes/100));
+    document.getElementById('pr-cuota').value = plazo>0 ? Math.round(total/plazo) : 0;
+  };
+  ['pr-monto','pr-interes','pr-plazo'].forEach(id=>document.getElementById(id).addEventListener('input', recalc));
+}
+function guardarPrestamo(){
+  const clienteId = document.getElementById('pr-cliente').value;
+  const monto = Number(document.getElementById('pr-monto').value||0);
+  const interesPct = Number(document.getElementById('pr-interes').value||0);
+  const plazoDias = Number(document.getElementById('pr-plazo').value||0);
+  const fechaInicio = document.getElementById('pr-fecha').value;
+  const cuotaDiaria = Number(document.getElementById('pr-cuota').value||0);
+  if(!clienteId || !monto || !plazoDias || !fechaInicio || !cuotaDiaria){ toast('Completa todos los campos.'); return; }
+  const cliente = clienteDe(clienteId);
+  const p = { id: uid('prest'), clienteId, rutaId: cliente.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, creadoPor: currentUser.id, cancelado:false };
+  DB.prestamos.push(p);
+  guardarDB(); cerrarModal();
+  refrescarVistaActual();
+  mostrarRecibo(reciboTextoDesembolso(p), cliente);
+}
+function verPrestamo(id){
+  const p = prestamoDe(id); const c = clienteDe(p.clienteId);
+  const abonos = DB.abonos.filter(a=>a.prestamoId===id).slice().reverse();
+  const est = estadoPrestamo(p);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>${esc(c.nombre)}</h3>
+    <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;">${esc(c.cedula)} · ${esc(rutaDe(p.rutaId)?.nombre||'Sin ruta')}</p>
+    <div class="grid-stats" style="margin:12px 0;">
+      <div class="stat"><div class="n">${fmtMoney(p.monto)}</div><div class="l">prestado</div></div>
+      <div class="stat"><div class="n">${fmtMoney(totalAPagar(p))}</div><div class="l">total a pagar</div></div>
+      <div class="stat"><div class="n">${fmtMoney(saldoPrestamo(p))}</div><div class="l">saldo</div></div>
+      <div class="stat"><div class="n">${p.plazoDias}d</div><div class="l">plazo</div></div>
+    </div>
+    <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span></p>
+    ${est!=='pagado' && !p.cancelado ? `<button class="btn" style="width:100%" onclick="formAbono('${p.id}')">+ Registrar abono</button>` : ''}
+    <h4 style="margin-top:16px;">Abonos</h4>
+    ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
+      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}</td><td class="num">${fmtMoney(a.monto)}</td><td><button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="vacio">Sin abonos todavía.</div>'}
+    ${esAdmin() && !p.cancelado ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
+  `);
+}
+function cancelarPrestamo(id){
+  const p = prestamoDe(id); p.cancelado = true;
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+function formAbono(prestamoId){
+  const p = prestamoDe(prestamoId);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Registrar abono</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">Saldo actual: <b>${fmtMoney(saldoPrestamo(p))}</b> · Cuota diaria: ${fmtMoney(p.cuotaDiaria)}</p>
+    <div class="campo"><label>Monto recibido</label><input type="number" id="ab-monto" min="0" step="500" value="${p.cuotaDiaria}"></div>
+    <div class="campo"><label>Fecha</label><input type="date" id="ab-fecha" value="${todayStr()}"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarAbono('${prestamoId}')">Guardar</button>
+    </div>
+  `);
+}
+function guardarAbono(prestamoId){
+  const monto = Number(document.getElementById('ab-monto').value||0);
+  const fecha = document.getElementById('ab-fecha').value;
+  if(!monto || !fecha){ toast('Completa monto y fecha.'); return; }
+  const a = { id: uid('abono'), prestamoId, monto, fecha, cobradorId: currentUser.id };
+  DB.abonos.push(a);
+  guardarDB(); cerrarModal();
+  const p = prestamoDe(prestamoId);
+  refrescarVistaActual();
+  mostrarRecibo(reciboTextoAbono(a), clienteDe(p.clienteId));
+}
+
+/* ======================================================================
+   RECIBOS: imprimir / PDF (impresión del navegador) + enlace WhatsApp
+====================================================================== */
+function reciboTextoDesembolso(p){
+  const c = clienteDe(p.clienteId);
+  return [
+    '*ER TOOL* — Comprobante de préstamo',
+    DB.empresa.nombre,
+    '------------------------------',
+    'Cliente: '+c.nombre,
+    'Cédula: '+c.cedula,
+    'Fecha: '+fmtDate(p.fechaInicio),
+    '------------------------------',
+    'Monto prestado: '+fmtMoney(p.monto),
+    'Total a pagar: '+fmtMoney(totalAPagar(p)),
+    'Cuota diaria: '+fmtMoney(p.cuotaDiaria),
+    'Plazo: '+p.plazoDias+' días',
+    '------------------------------',
+    'Gracias por su confianza.'
+  ].join('\n');
+}
+function reciboTextoAbono(a){
+  const p = prestamoDe(a.prestamoId); const c = clienteDe(p.clienteId);
+  return [
+    '*ER TOOL* — Comprobante de abono',
+    DB.empresa.nombre,
+    '------------------------------',
+    'Cliente: '+c.nombre,
+    'Fecha: '+fmtDate(a.fecha),
+    '------------------------------',
+    'Abono recibido: '+fmtMoney(a.monto),
+    'Saldo restante: '+fmtMoney(saldoPrestamo(p)),
+    '------------------------------',
+    'Gracias por su pago.'
+  ].join('\n');
+}
+function mostrarRecibo(texto, cliente){
+  const tel = (cliente?.telefono||'').replace(/\D/g,'');
+  const codigoPais = DB.empresa.codigoTel || '57';
+  const telCompleto = tel ? (tel.startsWith(codigoPais) ? tel : codigoPais+tel) : '';
+  const linkWa = telCompleto ? 'https://wa.me/'+telCompleto+'?text='+encodeURIComponent(texto.replace(/\*/g,'')) : '';
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Recibo</h3>
+    <div class="recibo-preview" id="recibo-texto-visible">${esc(texto)}</div>
+    <div class="acciones-modal">
+      ${linkWa? `<a class="btn" href="${linkWa}" target="_blank" rel="noopener">📲 Enviar por WhatsApp</a>` : '<span style="font-size:12px;color:var(--ink-soft)">Este cliente no tiene teléfono guardado.</span>'}
+      <button class="btn secundario" onclick="imprimirRecibo(${JSON.stringify(texto)})">🖨️ Imprimir / PDF</button>
+      <button class="btn secundario" onclick="cerrarModal()">Cerrar</button>
+    </div>
+  `);
+}
+function imprimirRecibo(texto){
+  document.getElementById('recibo-imprimible').textContent = texto;
+  window.print();
+}
+
+/* ======================================================================
+   CUADRE DE CAJA (diario / semanal / mensual)
+====================================================================== */
+function renderCuadre(el){
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Cuadre de caja</h2></div>
+    <div class="fila" style="max-width:420px;">
+      <div class="campo"><label>Periodo</label>
+        <select id="cu-periodo" onchange="renderCuadreTabla()"><option value="dia">Diario</option><option value="semana">Semanal</option><option value="mes">Mensual</option></select>
+      </div>
+      <div class="campo"><label>Fecha de referencia</label><input type="date" id="cu-fecha" value="${todayStr()}" onchange="renderCuadreTabla()"></div>
+    </div>
+    <div id="cuadre-contenido"></div>
+  `;
+  renderCuadreTabla();
+}
+function rangoCuadre(periodo, fechaRef){
+  if(periodo==='dia') return [fechaRef, fechaRef];
+  if(periodo==='semana'){ const ini = inicioSemana(fechaRef); return [ini, sumarDias(ini,6)]; }
+  const ini = inicioMes(fechaRef); const finMes = new Date(fechaRef.slice(0,7)+'-01T00:00:00'); finMes.setMonth(finMes.getMonth()+1); finMes.setDate(0);
+  return [ini, finMes.toISOString().slice(0,10)];
+}
+function renderCuadreTabla(){
+  const periodo = document.getElementById('cu-periodo').value;
+  const fechaRef = document.getElementById('cu-fecha').value;
+  const [desde, hasta] = rangoCuadre(periodo, fechaRef);
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const rutasVer = esAdmin() ? DB.rutas : DB.rutas.filter(r=>idsRuta.includes(r.id));
+
+  const filasPorRuta = rutasVer.map(r=>{
+    const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
+    const idsPrestamo = prestamosRuta.map(p=>p.id);
+    const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta).reduce((s,p)=>s+Number(p.monto||0),0);
+    const recaudado = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
+    return { nombre:r.nombre, desembolsado, recaudado, neto: recaudado-desembolsado };
+  });
+  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, neto:acc.neto+f.neto}), {desembolsado:0,recaudado:0,neto:0});
+
+  document.getElementById('cuadre-contenido').innerHTML = `
+    <div class="grid-stats" style="margin-top:14px;">
+      <div class="stat"><div class="n">${fmtMoney(totales.recaudado)}</div><div class="l">recaudado (${fmtDate(desde)} – ${fmtDate(hasta)})</div></div>
+      <div class="stat"><div class="n">${fmtMoney(totales.desembolsado)}</div><div class="l">prestado en el periodo</div></div>
+      <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja</div></div>
+    </div>
+    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Neto</th></tr></thead>
+    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.neto)}</td></tr>`).join('') : '<tr><td colspan="4"><div class="vacio">No hay rutas.</div></td></tr>'}</tbody>
+    </table></div>
+  `;
+}
+
+/* ======================================================================
+   USUARIOS (admin de empresa gestiona cobradores / otros admins)
+====================================================================== */
+function renderUsuarios(el){
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Usuarios</h2><button class="btn" onclick="formUsuario()">+ Nuevo usuario</button></div>
+    <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${DB.usuarios.map(u=>`
+      <tr>
+        <td>${esc(u.nombre)}${u.protegido?' <span class="rol-badge" title="Cuenta de soporte técnico protegida">🛡️ soporte</span>':''}</td>
+        <td>${esc(u.usuario)}</td><td>${esc(u.rol)}</td>
+        <td>${u.activo===false?'<span class="pill warn">Inactivo</span>':'<span class="pill ok">Activo</span>'}</td>
+        <td>${u.protegido?'—':`<button class="btn secundario chico" onclick="formUsuario('${u.id}')">Editar</button>`}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  `;
+}
+function formUsuario(id){
+  const u = id? DB.usuarios.find(x=>x.id===id) : null;
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>${u?'Editar usuario':'Nuevo usuario'}</h3>
+    <div class="campo"><label>Nombre</label><input type="text" id="us-nombre" value="${esc(u?.nombre||'')}"></div>
+    <div class="fila">
+      <div class="campo"><label>Usuario (para iniciar sesión)</label><input type="text" id="us-usuario" value="${esc(u?.usuario||'')}"></div>
+      <div class="campo"><label>Rol</label>
+        <select id="us-rol">
+          <option value="cobrador" ${u?.rol==='cobrador'?'selected':''}>Cobrador</option>
+          <option value="admin" ${u?.rol==='admin'?'selected':''}>Administrador de la empresa</option>
+        </select>
+      </div>
+    </div>
+    <div class="campo"><label>${u?'Nueva clave (dejar en blanco para no cambiarla)':'Clave'}</label><input type="password" id="us-clave"></div>
+    ${u? `<label style="display:flex;align-items:center;gap:8px;font-weight:400;"><input type="checkbox" id="us-activo" ${u.activo===false?'':'checked'} style="width:auto;"> Usuario activo</label>` : ''}
+    <div class="acciones-modal">
+      ${u?`<button class="btn peligro" onclick="borrarUsuario('${u.id}')">Eliminar</button>`:''}
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarUsuario('${u?u.id:''}')">Guardar</button>
+    </div>
+  `);
+}
+function guardarUsuario(id){
+  const nombre = document.getElementById('us-nombre').value.trim();
+  const usuario = document.getElementById('us-usuario').value.trim();
+  const rol = document.getElementById('us-rol').value;
+  const clave = document.getElementById('us-clave').value;
+  if(!nombre || !usuario){ toast('Nombre y usuario son obligatorios.'); return; }
+  if(DB.usuarios.some(x=>x.usuario.toLowerCase()===usuario.toLowerCase() && x.id!==id)){ toast('Ese nombre de usuario ya existe.'); return; }
+  if(id){
+    const u = DB.usuarios.find(x=>x.id===id);
+    Object.assign(u, { nombre, usuario, rol, activo: document.getElementById('us-activo').checked });
+    if(clave) u.claveHash = hashClave(clave);
+  }else{
+    if(!clave){ toast('Ponle una clave al usuario nuevo.'); return; }
+    DB.usuarios.push({ id: uid('usr'), nombre, usuario, rol, claveHash: hashClave(clave), activo:true });
+  }
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+function borrarUsuario(id){
+  const u = DB.usuarios.find(x=>x.id===id);
+  if(u.protegido){ toast('Esta cuenta está protegida.'); return; }
+  DB.rutas.forEach(r=>{ r.cobradores = (r.cobradores||[]).filter(cid=>cid!==id); });
+  DB.usuarios = DB.usuarios.filter(x=>x.id!==id);
+  guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+
+/* ======================================================================
+   PANEL DE SOPORTE (multi-empresa: crear empresas, activar/desactivar)
+====================================================================== */
+let soporteKey = '';
+async function entrarSoporte(){
+  const clave = document.getElementById('soporte-clave').value;
+  const err = document.getElementById('soporte-login-error');
+  try{
+    const res = await fetch('/api/registry', { headers:{'X-Soporte-Key': clave} });
+    if(!res.ok){ err.textContent = 'Clave incorrecta.'; return; }
+    soporteKey = clave;
+    sessionStorage.setItem('ertool_soporte_ok','1');
+    sessionStorage.setItem('ertool_soporte_key', clave);
+    document.getElementById('pantalla-soporte-login').classList.add('hidden');
+    await entrarSoporteDirecto();
+  }catch(e){ err.textContent = 'No se pudo conectar con el servidor.'; }
+}
+async function entrarSoporteDirecto(){
+  soporteKey = sessionStorage.getItem('ertool_soporte_key') || soporteKey;
+  document.getElementById('panel-soporte').classList.remove('hidden');
+  await cargarRegistroEmpresas();
+}
+function salirSoporte(){ sessionStorage.removeItem('ertool_soporte_ok'); sessionStorage.removeItem('ertool_soporte_key'); location.reload(); }
+async function cargarRegistroEmpresas(){
+  const res = await fetch('/api/registry', { headers:{'X-Soporte-Key': soporteKey} });
+  const lista = await res.json();
+  document.getElementById('tbody-empresas').innerHTML = lista.length? lista.map(e=>`
+    <tr>
+      <td>${esc(e.nombre)}</td>
+      <td><code>${esc(e.slug)}</code> <button class="btn secundario chico" onclick="copiarLinkEmpresa('${esc(e.slug)}')">Copiar link</button></td>
+      <td>${e.activa? '<span class="pill ok">Activa</span>' : '<span class="pill warn">Inactiva</span>'}</td>
+      <td>${e.permanente? 'Sin vencimiento' : (e.vence? fmtDate(e.vence) : '—')}</td>
+      <td><button class="btn secundario chico" onclick="abrirModalEditarEmpresa('${esc(e.slug)}')">Gestionar</button></td>
+    </tr>`).join('') : '<tr><td colspan="5"><div class="vacio">No hay empresas creadas.</div></td></tr>';
+  window._registroEmpresas = lista;
+}
+function copiarLinkEmpresa(slug){
+  const url = location.origin + location.pathname + '?empresa=' + encodeURIComponent(slug);
+  navigator.clipboard?.writeText(url).then(()=>toast('Link copiado: '+url)).catch(()=>toast(url));
+}
+function abrirModalCrearEmpresa(){
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Crear empresa</h3>
+    <div class="campo"><label>Nombre del negocio</label><input type="text" id="ne-nombre"></div>
+    <div class="campo"><label>Código (slug para el link, sin espacios)</label><input type="text" id="ne-slug" placeholder="ej: prestamos-cali"></div>
+    <div class="fila">
+      <div class="campo"><label>Vence el</label><input type="date" id="ne-vence"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:26px;"><input type="checkbox" id="ne-permanente" style="width:auto;"> Sin vencimiento</label>
+    </div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="crearEmpresa()">Crear</button>
+    </div>
+  `);
+}
+async function crearEmpresa(){
+  const nombre = document.getElementById('ne-nombre').value.trim();
+  let slug = document.getElementById('ne-slug').value.trim().toLowerCase().replace(/[^a-z0-9-]/g,'-');
+  const vence = document.getElementById('ne-vence').value;
+  const permanente = document.getElementById('ne-permanente').checked;
+  if(!nombre || !slug){ toast('Completa nombre y código.'); return; }
+  const res = await fetch('/api/registry', {
+    method:'POST', headers:{'Content-Type':'application/json','X-Soporte-Key':soporteKey},
+    body: JSON.stringify({ slug, nombre, vence: permanente?null:vence, permanente })
+  });
+  if(!res.ok){ toast('No se pudo crear (¿el código ya existe?).'); return; }
+  cerrarModal(); await cargarRegistroEmpresas(); toast('Empresa creada. Copia su link y compártelo.');
+}
+function abrirModalEditarEmpresa(slug){
+  const e = window._registroEmpresas.find(x=>x.slug===slug);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>${esc(e.nombre)}</h3>
+    <p style="font-size:12.5px;color:var(--ink-soft)">Código: <code>${esc(e.slug)}</code></p>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:400;"><input type="checkbox" id="ee-activa" ${e.activa?'checked':''} style="width:auto;"> Empresa activa</label>
+    <div class="fila">
+      <div class="campo"><label>Vence el</label><input type="date" id="ee-vence" value="${e.vence||''}"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:26px;"><input type="checkbox" id="ee-permanente" ${e.permanente?'checked':''} style="width:auto;"> Sin vencimiento</label>
+    </div>
+    <div class="acciones-modal">
+      <button class="btn" onclick="guardarEdicionEmpresa('${slug}')">Guardar</button>
+    </div>
+  `);
+}
+async function guardarEdicionEmpresa(slug){
+  const activa = document.getElementById('ee-activa').checked;
+  const permanente = document.getElementById('ee-permanente').checked;
+  const vence = document.getElementById('ee-vence').value;
+  await fetch('/api/registry/'+encodeURIComponent(slug), {
+    method:'PATCH', headers:{'Content-Type':'application/json','X-Soporte-Key':soporteKey},
+    body: JSON.stringify({ activa, permanente, vence: permanente?null:vence })
+  });
+  cerrarModal(); await cargarRegistroEmpresas(); toast('Actualizado.');
+}
+</script>
+</body>
+</html>
