@@ -137,6 +137,12 @@
 
   .rol-badge{ font-size:10.5px; padding:2px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:700; text-transform:uppercase; }
 
+  .avatar-circulo{ width:44px; height:44px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:17px; flex-shrink:0; }
+  .cli-encab{ display:flex; align-items:center; gap:12px; margin-bottom:2px; }
+  .progreso-track{ height:8px; border-radius:99px; background:var(--line); overflow:hidden; margin:4px 0 2px; }
+  .progreso-fill{ height:100%; background:var(--accent); border-radius:99px; transition:width .25s ease; }
+  .progreso-lbl{ display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink-soft); }
+
   footer.pie-app{ text-align:center; font-size:11.5px; color:var(--ink-soft); padding:16px; }
 </style>
 </head>
@@ -222,6 +228,7 @@
     <div class="vista" id="vista-prestamos"></div>
     <div class="vista" id="vista-cuadre"></div>
     <div class="vista" id="vista-usuarios"></div>
+    <div class="vista" id="vista-empresa"></div>
   </main>
   <footer class="pie-app">ER TOOL · <span id="pie-empresa"></span></footer>
 </div>
@@ -270,7 +277,7 @@ function inicioMes(fechaStr){ return fechaStr.slice(0,7)+'-01'; }
 --------------------------------------------------------------------- */
 function defaultDB(){
   return {
-    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos' }, // diasCobro: 'todos' | 'lunSab'
+    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos', googleMapsApiKey: '' }, // diasCobro: 'todos' | 'lunSab'
     usuarios: [
       { id:'u_soporte', usuario:'soporte', claveHash: hashClave('cambiar-esta-clave'), rol:'soporte', nombre:'Soporte Técnico', protegido:true },
       { id:'u_admin_demo', usuario:'admin', claveHash: hashClave('admin123'), rol:'admin', nombre:'Administrador', activo:true }
@@ -421,7 +428,8 @@ const PESTANIAS = [
   { id:'clientes', label:'Clientes', render: renderClientes, ver: ()=>true },
   { id:'rutas', label:'Rutas', render: renderRutas, ver: esAdmin },
   { id:'cuadre', label:'Cuadre de caja', render: renderCuadre, ver: ()=>true },
-  { id:'usuarios', label:'Usuarios', render: renderUsuarios, ver: esAdmin }
+  { id:'usuarios', label:'Usuarios', render: renderUsuarios, ver: esAdmin },
+  { id:'empresa', label:'Empresa', render: renderEmpresaConfig, ver: esAdmin }
 ];
 
 function iniciarApp(){
@@ -563,6 +571,90 @@ function borrarRuta(id){
 }
 
 /* ======================================================================
+   UBICACIÓN (GPS gratis siempre disponible + mapa de Google Maps opcional)
+====================================================================== */
+let googleMapsEstado = 'sin-cargar'; // 'sin-cargar' | 'cargando' | 'listo' | 'error'
+let googleMapsPromesa = null;
+function cargarGoogleMaps(){
+  if(googleMapsPromesa) return googleMapsPromesa;
+  const key = DB.empresa.googleMapsApiKey;
+  if(!key){ return Promise.reject(new Error('SIN_CLAVE')); }
+  googleMapsEstado = 'cargando';
+  googleMapsPromesa = new Promise((resolve, reject)=>{
+    window.__onGoogleMapsListo = ()=>{ googleMapsEstado='listo'; resolve(window.google); };
+    const s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(key)+'&libraries=places&callback=__onGoogleMapsListo';
+    s.onerror = ()=>{ googleMapsEstado='error'; reject(new Error('No se pudo cargar Google Maps (revisa la clave).')); };
+    document.head.appendChild(s);
+  });
+  return googleMapsPromesa;
+}
+function linkGoogleMaps(lat, lng){ return 'https://www.google.com/maps/search/?api=1&query='+lat+','+lng; }
+function bloqueUbicacionHTML(prefix, valor){
+  const tieneValor = valor && valor.lat!=null && valor.lng!=null;
+  return `
+    <div class="campo" id="${prefix}-wrap">
+      <label>Ubicación</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn secundario chico" onclick="capturarUbicacionGPS('${prefix}')">📍 Usar mi ubicación actual (GPS)</button>
+        <span id="${prefix}-estado" style="font-size:12.5px;color:var(--ink-soft);">${tieneValor?('Guardada: '+Number(valor.lat).toFixed(5)+', '+Number(valor.lng).toFixed(5)):'Sin ubicación guardada'}</span>
+        <a id="${prefix}-link" href="${tieneValor?linkGoogleMaps(valor.lat,valor.lng):'#'}" target="_blank" rel="noopener" style="font-size:12.5px;${tieneValor?'':'display:none;'}">Ver en Google Maps ↗</a>
+      </div>
+      <div id="${prefix}-mapa" style="height:170px;border:1px solid var(--line);border-radius:8px;margin-top:8px;display:none;background:#f2f2f2;"></div>
+      <input type="hidden" id="${prefix}-lat" value="${tieneValor?valor.lat:''}">
+      <input type="hidden" id="${prefix}-lng" value="${tieneValor?valor.lng:''}">
+    </div>
+  `;
+}
+function fijarUbicacionCampos(prefix, lat, lng){
+  document.getElementById(prefix+'-lat').value = lat;
+  document.getElementById(prefix+'-lng').value = lng;
+  document.getElementById(prefix+'-estado').textContent = 'Guardada: '+Number(lat).toFixed(5)+', '+Number(lng).toFixed(5);
+  const link = document.getElementById(prefix+'-link');
+  link.href = linkGoogleMaps(lat,lng); link.style.display = '';
+}
+function capturarUbicacionGPS(prefix){
+  if(!navigator.geolocation){ toast('Este navegador no permite obtener la ubicación GPS.'); return; }
+  toast('Obteniendo ubicación...');
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      fijarUbicacionCampos(prefix, pos.coords.latitude, pos.coords.longitude);
+      moverMarcadorMapa(prefix, pos.coords.latitude, pos.coords.longitude);
+    },
+    err => toast('No se pudo obtener la ubicación: '+err.message),
+    { enableHighAccuracy:true, timeout:12000 }
+  );
+}
+const mapasActivos = {};
+function moverMarcadorMapa(prefix, lat, lng){
+  const m = mapasActivos[prefix];
+  if(!m) return;
+  const pos = {lat:Number(lat), lng:Number(lng)};
+  m.marker.setPosition(pos);
+  m.map.setCenter(pos);
+}
+function activarBloqueUbicacion(prefix, valorInicial){
+  if(!DB.empresa.googleMapsApiKey) return; // sin clave: se queda solo con el botón GPS
+  cargarGoogleMaps().then(google=>{
+    const cont = document.getElementById(prefix+'-mapa');
+    if(!cont) return; // el modal ya se cerró
+    cont.style.display = 'block';
+    const centro = (valorInicial && valorInicial.lat!=null) ? {lat:Number(valorInicial.lat), lng:Number(valorInicial.lng)} : {lat:4.6097, lng:-74.0817}; // Bogotá por defecto
+    const map = new google.maps.Map(cont, { center:centro, zoom: valorInicial&&valorInicial.lat!=null?15:5 });
+    const marker = new google.maps.Marker({ position:centro, map, draggable:true });
+    marker.addListener('dragend', ()=>{
+      const p = marker.getPosition();
+      fijarUbicacionCampos(prefix, p.lat(), p.lng());
+    });
+    map.addListener('click', e=>{
+      marker.setPosition(e.latLng);
+      fijarUbicacionCampos(prefix, e.latLng.lat(), e.latLng.lng());
+    });
+    mapasActivos[prefix] = {map, marker};
+  }).catch(e=>{ /* sin clave o clave inválida: se queda con el botón GPS nada más */ });
+}
+
+/* ======================================================================
    CLIENTES (con KYC: foto de cédula + selfie con cédula)
 ====================================================================== */
 function renderClientes(el){
@@ -573,7 +665,7 @@ function renderClientes(el){
     <div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Cédula</th><th>Teléfono</th><th>Ruta</th><th>KYC</th><th></th></tr></thead>
     <tbody>${lista.length? lista.map(c=>`
       <tr>
-        <td>${esc(c.nombre)}</td><td>${esc(c.cedula)}</td><td>${esc(c.telefono)}</td>
+        <td>${esc(c.nombre)}${c.ubicacion?` <a href="${linkGoogleMaps(c.ubicacion.lat,c.ubicacion.lng)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Ver ubicación en Google Maps">📍</a>`:''}</td><td>${esc(c.cedula)}</td><td>${esc(c.telefono)}</td>
         <td>${esc(rutaDe(c.rutaId)?.nombre||'—')}</td>
         <td>${c.fotoCedula && c.fotoSelfie? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta foto</span>'}</td>
         <td><button class="btn secundario chico" onclick="formCliente('${c.id}')">Ver / editar</button></td>
@@ -629,6 +721,7 @@ function formCliente(id){
       </div>
     </div>
     <div class="campo"><label>Dirección</label><input type="text" id="cl-direccion" value="${esc(c?.direccion||'')}"></div>
+    ${bloqueUbicacionHTML('cl-ubic', c?.ubicacion)}
     <label>Verificación de identidad (KYC)</label>
     <p style="font-size:12px;color:var(--ink-soft);margin:0 0 4px;">Toma una foto de la cédula y una selfie de la persona sosteniendo su cédula junto a la cara, para confirmar que el préstamo es a una persona real.</p>
     <div class="foto-kyc">
@@ -649,16 +742,19 @@ function formCliente(id){
       <button class="btn" onclick="guardarCliente('${c?c.id:''}')">Guardar</button>
     </div>
   `);
+  activarBloqueUbicacion('cl-ubic', c?.ubicacion);
 }
 function guardarCliente(id){
   const nombre = document.getElementById('cl-nombre').value.trim();
   const cedula = document.getElementById('cl-cedula').value.trim();
   if(!nombre || !cedula){ toast('Nombre y cédula son obligatorios.'); return; }
+  const latVal = document.getElementById('cl-ubic-lat').value, lngVal = document.getElementById('cl-ubic-lng').value;
   const datos = {
     nombre, cedula,
     telefono: document.getElementById('cl-telefono').value.trim(),
     rutaId: document.getElementById('cl-ruta').value || null,
     direccion: document.getElementById('cl-direccion').value.trim(),
+    ubicacion: (latVal && lngVal) ? { lat:Number(latVal), lng:Number(lngVal) } : null,
     fotoCedula: document.getElementById('slot-cedula').dataset.valor || null,
     fotoSelfie: document.getElementById('slot-selfie').dataset.valor || null
   };
@@ -716,8 +812,9 @@ function renderPrestamos(el){
     <tbody>${lista.length? lista.map(p=>{
       const est = estadoPrestamo(p);
       const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='cancelado'?'pend':'ok'));
+      const cliP = clienteDe(p.clienteId);
       return `<tr class="fila-clic" onclick="verPrestamo('${p.id}')">
-        <td>${esc(clienteDe(p.clienteId)?.nombre||'—')}</td>
+        <td><div style="display:flex;align-items:center;gap:8px;"><div class="avatar-circulo" style="width:26px;height:26px;font-size:11.5px;">${esc((cliP?.nombre||'?').trim().charAt(0).toUpperCase())}</div>${esc(cliP?.nombre||'—')}</div></td>
         <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
         <td class="num">${fmtMoney(p.monto)}</td>
         <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
@@ -749,6 +846,7 @@ function formPrestamo(){
       <div class="campo"><label>Fecha de inicio</label><input type="date" id="pr-fecha" value="${todayStr()}"></div>
     </div>
     <div class="campo"><label>Cuota diaria (se calcula sola, puedes ajustarla)</label><input type="number" id="pr-cuota" min="0" step="500"></div>
+    ${bloqueUbicacionHTML('pr-ubic', null)}
     <div class="acciones-modal">
       <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarPrestamo()">Crear préstamo</button>
@@ -762,6 +860,14 @@ function formPrestamo(){
     document.getElementById('pr-cuota').value = plazo>0 ? Math.round(total/plazo) : 0;
   };
   ['pr-monto','pr-interes','pr-plazo'].forEach(id=>document.getElementById(id).addEventListener('input', recalc));
+  activarBloqueUbicacion('pr-ubic', null);
+  document.getElementById('pr-cliente').addEventListener('change', function(){
+    const cli = clienteDe(this.value);
+    if(cli && cli.ubicacion){
+      fijarUbicacionCampos('pr-ubic', cli.ubicacion.lat, cli.ubicacion.lng);
+      moverMarcadorMapa('pr-ubic', cli.ubicacion.lat, cli.ubicacion.lng);
+    }
+  });
 }
 function guardarPrestamo(){
   const clienteId = document.getElementById('pr-cliente').value;
@@ -772,7 +878,9 @@ function guardarPrestamo(){
   const cuotaDiaria = Number(document.getElementById('pr-cuota').value||0);
   if(!clienteId || !monto || !plazoDias || !fechaInicio || !cuotaDiaria){ toast('Completa todos los campos.'); return; }
   const cliente = clienteDe(clienteId);
-  const p = { id: uid('prest'), clienteId, rutaId: cliente.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, creadoPor: currentUser.id, cancelado:false };
+  const latVal = document.getElementById('pr-ubic-lat').value, lngVal = document.getElementById('pr-ubic-lng').value;
+  const ubicacion = (latVal && lngVal) ? { lat:Number(latVal), lng:Number(lngVal) } : null;
+  const p = { id: uid('prest'), clienteId, rutaId: cliente.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, ubicacion, creadoPor: currentUser.id, cancelado:false };
   DB.prestamos.push(p);
   guardarDB(); cerrarModal();
   refrescarVistaActual();
@@ -782,21 +890,34 @@ function verPrestamo(id){
   const p = prestamoDe(id); const c = clienteDe(p.clienteId);
   const abonos = DB.abonos.filter(a=>a.prestamoId===id).slice().reverse();
   const est = estadoPrestamo(p);
+  const totalP = totalAPagar(p);
+  const saldoP = saldoPrestamo(p);
+  const pctPagado = totalP>0 ? Math.min(100, Math.round((totalP-saldoP)/totalP*100)) : 0;
+  const inicial = (c.nombre||'?').trim().charAt(0).toUpperCase();
   abrirModal(`
     <button class="cerrar" onclick="cerrarModal()">✕</button>
-    <h3>${esc(c.nombre)}</h3>
-    <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;">${esc(c.cedula)} · ${esc(rutaDe(p.rutaId)?.nombre||'Sin ruta')}</p>
+    <div class="cli-encab">
+      <div class="avatar-circulo">${esc(inicial)}</div>
+      <div>
+        <h3 style="margin-bottom:1px;">${esc(c.nombre)}</h3>
+        <p style="font-size:13px;color:var(--ink-soft);margin:0;">${esc(c.cedula)} · ${esc(rutaDe(p.rutaId)?.nombre||'Sin ruta')}</p>
+      </div>
+    </div>
+    <div class="progreso-track"><div class="progreso-fill" style="width:${pctPagado}%"></div></div>
+    <div class="progreso-lbl"><span>${pctPagado}% pagado</span><span>${fmtMoney(totalP-saldoP)} de ${fmtMoney(totalP)}</span></div>
     <div class="grid-stats" style="margin:12px 0;">
       <div class="stat"><div class="n">${fmtMoney(p.monto)}</div><div class="l">prestado</div></div>
-      <div class="stat"><div class="n">${fmtMoney(totalAPagar(p))}</div><div class="l">total a pagar</div></div>
-      <div class="stat"><div class="n">${fmtMoney(saldoPrestamo(p))}</div><div class="l">saldo</div></div>
+      <div class="stat"><div class="n">${fmtMoney(totalP)}</div><div class="l">total a pagar</div></div>
+      <div class="stat"><div class="n">${fmtMoney(saldoP)}</div><div class="l">saldo</div></div>
       <div class="stat"><div class="n">${p.plazoDias}d</div><div class="l">plazo</div></div>
     </div>
-    <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span></p>
-    ${est!=='pagado' && !p.cancelado ? `<button class="btn" style="width:100%" onclick="formAbono('${p.id}')">+ Registrar abono</button>` : ''}
+    <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span> ${p.ubicacion?`<a href="${linkGoogleMaps(p.ubicacion.lat,p.ubicacion.lng)}" target="_blank" rel="noopener" style="font-size:13px;">📍 Ver ubicación en Google Maps ↗</a>`:''}</p>
+    ${p.renovadoDe ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo es una renovación de otro. <a href="#" onclick="verPrestamo('${p.renovadoDe}');return false;">Ver préstamo anterior</a></div>` : ''}
+    ${p.renovadoA ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo fue renovado. <a href="#" onclick="verPrestamo('${p.renovadoA}');return false;">Ver préstamo nuevo</a></div>` : ''}
+    ${est!=='pagado' && !p.cancelado ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
     <h4 style="margin-top:16px;">Abonos</h4>
     ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
-      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}</td><td class="num">${fmtMoney(a.monto)}</td><td><button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button></td></tr>`).join('')}
+      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':''}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="vacio">Sin abonos todavía.</div>'}
     ${esAdmin() && !p.cancelado ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
   `);
@@ -829,6 +950,94 @@ function guardarAbono(prestamoId){
   const p = prestamoDe(prestamoId);
   refrescarVistaActual();
   mostrarRecibo(reciboTextoAbono(a), clienteDe(p.clienteId));
+}
+
+/* ======================================================================
+   RENOVAR PRÉSTAMO: sin esperar a que termine — se descuenta lo que debe
+   del nuevo monto, se le entrega el resto en efectivo, y el préstamo
+   viejo queda saldado (vía un abono especial "de renovación").
+====================================================================== */
+function formRenovarPrestamo(prestamoId){
+  const p = prestamoDe(prestamoId);
+  const saldo = saldoPrestamo(p);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Renovar préstamo</h3>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Saldo pendiente del préstamo actual: <b>${fmtMoney(saldo)}</b>. Ese saldo se descuenta del nuevo préstamo; el resto se le entrega en efectivo al cliente.</p>
+    <div class="campo"><label>Nuevo monto del préstamo</label><input type="number" id="rn-monto" min="0" step="1000" value="${p.monto}"></div>
+    <div class="fila">
+      <div class="campo"><label>Interés total (%)</label><input type="number" id="rn-interes" min="0" step="0.5" value="${p.interesPct}"></div>
+      <div class="campo"><label>Plazo (días)</label><input type="number" id="rn-plazo" min="1" step="1" value="${p.plazoDias}"></div>
+    </div>
+    <div class="fila">
+      <div class="campo"><label>Fecha</label><input type="date" id="rn-fecha" value="${todayStr()}"></div>
+      <div class="campo"><label>Cuota diaria nueva</label><input type="number" id="rn-cuota" min="0" step="500"></div>
+    </div>
+    <div class="card" id="rn-resumen" style="margin-top:12px;"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" id="rn-btn-confirmar" onclick="confirmarRenovacion('${p.id}')">Confirmar renovación</button>
+    </div>
+  `);
+  const recalc = ()=>{
+    const monto = Number(document.getElementById('rn-monto').value||0);
+    const interes = Number(document.getElementById('rn-interes').value||0);
+    const plazo = Number(document.getElementById('rn-plazo').value||1);
+    const total = Math.round(monto*(1+interes/100));
+    document.getElementById('rn-cuota').value = plazo>0 ? Math.round(total/plazo) : 0;
+    const entrega = monto - saldo;
+    const btn = document.getElementById('rn-btn-confirmar');
+    const resumen = document.getElementById('rn-resumen');
+    if(entrega < 0){
+      resumen.innerHTML = `<p style="margin:0;color:var(--mora);font-size:13.5px;">El nuevo monto no alcanza a cubrir el saldo pendiente (${fmtMoney(saldo)}). Sube el monto o registra antes un abono parcial.</p>`;
+      btn.disabled = true;
+    }else{
+      resumen.innerHTML = `<p style="margin:0;font-size:13.5px;">Se descuenta el saldo pendiente: <b>${fmtMoney(saldo)}</b><br>Efectivo a entregar al cliente: <b>${fmtMoney(entrega)}</b></p>`;
+      btn.disabled = false;
+    }
+  };
+  ['rn-monto','rn-interes','rn-plazo'].forEach(id=>document.getElementById(id).addEventListener('input', recalc));
+  recalc();
+}
+function confirmarRenovacion(prestamoIdViejo){
+  const pViejo = prestamoDe(prestamoIdViejo);
+  const saldo = saldoPrestamo(pViejo);
+  const monto = Number(document.getElementById('rn-monto').value||0);
+  const interesPct = Number(document.getElementById('rn-interes').value||0);
+  const plazoDias = Number(document.getElementById('rn-plazo').value||0);
+  const fechaInicio = document.getElementById('rn-fecha').value;
+  const cuotaDiaria = Number(document.getElementById('rn-cuota').value||0);
+  if(!plazoDias || !fechaInicio || !cuotaDiaria){ toast('Completa todos los campos.'); return; }
+  if(monto < saldo){ toast('El nuevo monto debe cubrir al menos el saldo pendiente.'); return; }
+  const abonoRenov = { id: uid('abono'), prestamoId: prestamoIdViejo, monto: saldo, fecha: fechaInicio, cobradorId: currentUser.id, tipo:'renovacion' };
+  DB.abonos.push(abonoRenov);
+  const nuevo = { id: uid('prest'), clienteId: pViejo.clienteId, rutaId: pViejo.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, ubicacion: pViejo.ubicacion||null, creadoPor: currentUser.id, cancelado:false, renovadoDe: prestamoIdViejo };
+  DB.prestamos.push(nuevo);
+  pViejo.renovadoA = nuevo.id;
+  guardarDB();
+  cerrarModal();
+  refrescarVistaActual();
+  const entregado = monto - saldo;
+  mostrarRecibo(reciboTextoRenovacion(pViejo, nuevo, saldo, entregado), clienteDe(pViejo.clienteId));
+}
+function reciboTextoRenovacion(pViejo, pNuevo, saldoDescontado, entregado){
+  const c = clienteDe(pViejo.clienteId);
+  return [
+    '*ER TOOL* — Renovación de préstamo',
+    DB.empresa.nombre,
+    '------------------------------',
+    'Cliente: '+c.nombre,
+    'Fecha: '+fmtDate(pNuevo.fechaInicio),
+    '------------------------------',
+    'Saldo anterior descontado: '+fmtMoney(saldoDescontado),
+    'Nuevo préstamo: '+fmtMoney(pNuevo.monto),
+    'Efectivo entregado: '+fmtMoney(entregado),
+    '------------------------------',
+    'Nueva cuota diaria: '+fmtMoney(pNuevo.cuotaDiaria),
+    'Plazo: '+pNuevo.plazoDias+' días',
+    '------------------------------',
+    'Gracias por su confianza.'
+  ].join('\n');
 }
 
 /* ======================================================================
@@ -1002,6 +1211,55 @@ function borrarUsuario(id){
   DB.rutas.forEach(r=>{ r.cobradores = (r.cobradores||[]).filter(cid=>cid!==id); });
   DB.usuarios = DB.usuarios.filter(x=>x.id!==id);
   guardarDB(); cerrarModal(); refrescarVistaActual();
+}
+
+/* ======================================================================
+   EMPRESA (datos del negocio, configuración, clave de Google Maps)
+====================================================================== */
+function renderEmpresaConfig(el){
+  const e = DB.empresa;
+  el.innerHTML = `
+    <div class="encab-vista"><h2>Datos de la empresa</h2></div>
+    <div class="card" style="max-width:520px;">
+      <div class="campo"><label>Nombre del negocio</label><input type="text" id="em-nombre" value="${esc(e.nombre||'')}"></div>
+      <div class="fila">
+        <div class="campo"><label>Código de país (WhatsApp)</label><input type="text" id="em-codigotel" value="${esc(e.codigoTel||'57')}" placeholder="57"></div>
+        <div class="campo"><label>Días de cobro</label>
+          <select id="em-diascobro">
+            <option value="todos" ${e.diasCobro==='todos'?'selected':''}>Todos los días</option>
+            <option value="lunSab" ${e.diasCobro==='lunSab'?'selected':''}>Lunes a sábado (sin domingos)</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar</button>
+    </div>
+
+    <h3 style="margin-top:30px;">📍 Google Maps (opcional)</h3>
+    <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;">
+      Sin esta clave, ER TOOL igual puede guardar la ubicación GPS del celular al crear un cliente o
+      préstamo (gratis, sin configurar nada) y abrirla en Google Maps. Si además pegas aquí tu propia
+      clave de la API de Google Maps, los formularios muestran un mapa para buscar direcciones y ubicar
+      el punto exacto con el dedo. Esa clave la generas tú en
+      <a href="https://console.cloud.google.com/google/maps-apis" target="_blank" rel="noopener">Google Cloud Console</a>
+      (requiere una cuenta con facturación habilitada; Google da una cuota gratis mensual, pero el uso que la
+      supere tiene costo — revisa los precios de "Maps JavaScript API" y "Places API" antes de activarlo).
+    </p>
+    <div class="card" style="max-width:520px;">
+      <div class="campo"><label>Clave de la API de Google Maps</label><input type="text" id="em-mapskey" value="${esc(e.googleMapsApiKey||'')}" placeholder="AIza..."></div>
+      <button class="btn secundario" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar clave</button>
+    </div>
+  `;
+}
+function guardarEmpresaConfig(){
+  DB.empresa.nombre = document.getElementById('em-nombre').value.trim() || DB.empresa.nombre;
+  DB.empresa.codigoTel = document.getElementById('em-codigotel').value.trim() || '57';
+  DB.empresa.diasCobro = document.getElementById('em-diascobro').value;
+  DB.empresa.googleMapsApiKey = document.getElementById('em-mapskey').value.trim();
+  guardarDB();
+  document.getElementById('topbar-empresa').textContent = DB.empresa.nombre;
+  document.getElementById('pie-empresa').textContent = DB.empresa.nombre;
+  toast('Datos de la empresa guardados.');
+  if(DB.empresa.googleMapsApiKey) cargarGoogleMaps();
 }
 
 /* ======================================================================
