@@ -131,6 +131,22 @@
   .foto-kyc .slot img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
   .foto-kyc .slot input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
 
+  .fotos-kyc-mini{ display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
+  .fotos-kyc-mini .mini{ text-align:center; font-size:11px; color:var(--ink-soft); }
+  .fotos-kyc-mini img{
+    width:64px; height:64px; object-fit:cover; border-radius:8px; border:1.5px solid var(--line);
+    cursor:zoom-in; display:block; margin-bottom:3px; background:var(--panel-2);
+  }
+  .lightbox-fondo{
+    position:fixed; inset:0; background:rgba(0,0,0,.88); z-index:9999; display:flex; align-items:center;
+    justify-content:center; padding:24px; cursor:zoom-out;
+  }
+  .lightbox-fondo img{ max-width:100%; max-height:100%; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .lightbox-fondo .cerrar-lightbox{
+    position:absolute; top:16px; right:20px; background:rgba(255,255,255,.12); color:#fff; border:none; border-radius:50%;
+    width:38px; height:38px; font-size:18px; cursor:pointer;
+  }
+
   .toast{
     position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--navy-dark); color:var(--ink); border:1px solid var(--line);
     padding:10px 18px; border-radius:8px; font-size:13.5px; z-index:200; box-shadow:var(--shadow); max-width:90vw; text-align:center;
@@ -251,6 +267,7 @@
 </div>
 
 <div id="modal-host"></div>
+<div id="lightbox-host"></div>
 <div id="recibo-imprimible"></div>
 <div id="hoja-imprimible"></div>
 
@@ -304,6 +321,7 @@ function defaultDB(){
     clientes: [],
     prestamos: [],
     abonos: [],
+    gastos: [],
     instalacionId: uid('inst')
   };
 }
@@ -479,6 +497,21 @@ function abrirModal(html){
   document.getElementById('modal-host').innerHTML = `<div class="modal-fondo" onclick="if(event.target===this) cerrarModal()"><div class="modal-wrap"><div class="modal">${html}</div></div></div>`;
 }
 function cerrarModal(){ document.getElementById('modal-host').innerHTML=''; }
+
+/* Lightbox de fotos (foto de cédula / selfie) — vive aparte del modal-host para poder
+   ampliar una foto sin cerrar el modal del préstamo o del cliente que está detrás. */
+function verFotoAmpliada(campo, clienteId){
+  const c = clienteDe(clienteId);
+  const url = c && c[campo];
+  if(!url) return;
+  document.getElementById('lightbox-host').innerHTML = `
+    <div class="lightbox-fondo" onclick="cerrarLightbox()">
+      <button class="cerrar-lightbox" onclick="cerrarLightbox()">✕</button>
+      <img src="${url}" alt="Foto ampliada">
+    </div>
+  `;
+}
+function cerrarLightbox(){ document.getElementById('lightbox-host').innerHTML=''; }
 
 /* ======================================================================
    INICIO (resumen del día)
@@ -1088,6 +1121,11 @@ function verPrestamo(id){
         <p style="font-size:13px;color:var(--ink-soft);margin:0;">${esc(c.cedula)} · ${esc(rutaDe(p.rutaId)?.nombre||'Sin ruta')}</p>
       </div>
     </div>
+    ${(c.fotoCedula || c.fotoSelfie) ? `
+    <div class="fotos-kyc-mini">
+      ${c.fotoCedula?`<div class="mini"><img src="${c.fotoCedula}" alt="Foto de cédula" onclick="verFotoAmpliada('fotoCedula','${c.id}')">Cédula</div>`:''}
+      ${c.fotoSelfie?`<div class="mini"><img src="${c.fotoSelfie}" alt="Selfie con cédula" onclick="verFotoAmpliada('fotoSelfie','${c.id}')">Selfie</div>`:''}
+    </div>` : `<p style="font-size:12px;color:var(--pend);margin:6px 0;">⚠️ Este cliente no tiene fotos de verificación (KYC) guardadas.</p>`}
     <div class="progreso-track"><div class="progreso-fill" style="width:${pctPagado}%"></div></div>
     <div class="progreso-lbl"><span>${pctPagado}% pagado</span><span>${fmtMoney(totalP-saldoP)} de ${fmtMoney(totalP)}</span></div>
     <div class="grid-stats" style="margin:12px 0;">
@@ -1312,7 +1350,7 @@ function imprimirRecibo(texto){
 ====================================================================== */
 function renderCuadre(el){
   el.innerHTML = `
-    <div class="encab-vista"><h2>💰 Cuadre de caja</h2></div>
+    <div class="encab-vista"><h2>💰 Cuadre de caja</h2><button class="btn secundario" onclick="formGasto()">➖ Agregar gasto</button></div>
     <div class="fila" style="max-width:420px;">
       <div class="campo"><label>Periodo</label>
         <select id="cu-periodo" onchange="renderCuadreTabla()"><option value="dia">Diario</option><option value="semana">Semanal</option><option value="mes">Mensual</option></select>
@@ -1322,6 +1360,47 @@ function renderCuadre(el){
     <div id="cuadre-contenido"></div>
   `;
   renderCuadreTabla();
+}
+function formGasto(){
+  const misRutas = rutasDelUsuario();
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>➖ Agregar gasto</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">Escribe libremente en qué se fue el dinero — gasolina, almuerzo, papelería, lo que sea. No hay que escoger de una lista.</p>
+    <div class="campo"><label>Descripción del gasto</label><input type="text" id="ga-descripcion" placeholder="Ej: Gasolina de la moto, Almuerzo del cobrador..." autofocus></div>
+    <div class="fila">
+      <div class="campo"><label>Valor</label><input type="number" id="ga-monto" min="0" step="500" placeholder="0"></div>
+      <div class="campo"><label>Fecha</label><input type="date" id="ga-fecha" value="${todayStr()}"></div>
+    </div>
+    <div class="campo"><label>Ruta (opcional)</label>
+      <select id="ga-ruta">
+        <option value="">— Gasto general (no es de una ruta) —</option>
+        ${misRutas.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarGasto()">Guardar gasto</button>
+    </div>
+  `);
+}
+function guardarGasto(){
+  const descripcion = document.getElementById('ga-descripcion').value.trim();
+  const monto = Number(document.getElementById('ga-monto').value||0);
+  const fecha = document.getElementById('ga-fecha').value;
+  const rutaId = document.getElementById('ga-ruta').value || null;
+  if(!descripcion){ toast('Escribe en qué se fue el dinero.'); return; }
+  if(!monto){ toast('Ingresa el valor del gasto.'); return; }
+  if(!fecha){ toast('Elige una fecha.'); return; }
+  DB.gastos = DB.gastos||[];
+  DB.gastos.push({ id: uid('gasto'), descripcion, monto, fecha, rutaId, registradoPor: currentUser.id });
+  guardarDB(); cerrarModal();
+  toast('Gasto registrado.');
+  refrescarVistaActual();
+}
+function borrarGasto(id){
+  DB.gastos = (DB.gastos||[]).filter(g=>g.id!==id);
+  guardarDB(); refrescarVistaActual();
 }
 function rangoCuadre(periodo, fechaRef){
   if(periodo==='dia') return [fechaRef, fechaRef];
@@ -1335,6 +1414,7 @@ function renderCuadreTabla(){
   const [desde, hasta] = rangoCuadre(periodo, fechaRef);
   const idsRuta = rutasDelUsuario().map(r=>r.id);
   const rutasVer = esAdmin() ? DB.rutas : DB.rutas.filter(r=>idsRuta.includes(r.id));
+  const gastosPeriodo = (DB.gastos||[]).filter(g=>g.fecha>=desde && g.fecha<=hasta && (esAdmin() || (g.rutaId && idsRuta.includes(g.rutaId))));
 
   const filasPorRuta = rutasVer.map(r=>{
     const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
@@ -1342,21 +1422,32 @@ function renderCuadreTabla(){
     const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta).reduce((s,p)=>s+Number(p.monto||0),0);
     const recaudado = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
     const comision = Math.round(recaudado * (Number(DB.empresa.comisionCobradorPct||0)/100));
-    return { nombre:r.nombre, desembolsado, recaudado, neto: recaudado-desembolsado, comision };
+    const gastosRuta = gastosPeriodo.filter(g=>g.rutaId===r.id).reduce((s,g)=>s+Number(g.monto||0),0);
+    return { nombre:r.nombre, desembolsado, recaudado, gastos:gastosRuta, neto: recaudado-desembolsado-gastosRuta, comision };
   });
-  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, neto:acc.neto+f.neto, comision:acc.comision+f.comision}), {desembolsado:0,recaudado:0,neto:0,comision:0});
+  const gastosGenerales = gastosPeriodo.filter(g=>!g.rutaId).reduce((s,g)=>s+Number(g.monto||0),0);
+  const totalGastos = gastosPeriodo.reduce((s,g)=>s+Number(g.monto||0),0);
+  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, comision:acc.comision+f.comision}), {desembolsado:0,recaudado:0,comision:0});
+  totales.gastos = totalGastos;
+  totales.neto = totales.recaudado - totales.desembolsado - totales.gastos;
   const hayComision = Number(DB.empresa.comisionCobradorPct||0) > 0;
 
   document.getElementById('cuadre-contenido').innerHTML = `
     <div class="grid-stats" style="margin-top:14px;">
       <div class="stat"><div class="n">${fmtMoney(totales.recaudado)}</div><div class="l">recaudado (${fmtDate(desde)} – ${fmtDate(hasta)})</div></div>
       <div class="stat"><div class="n">${fmtMoney(totales.desembolsado)}</div><div class="l">prestado en el periodo</div></div>
-      <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja</div></div>
+      <div class="stat"><div class="n" style="color:${totales.gastos>0?'var(--mora)':'inherit'}">${fmtMoney(totales.gastos)}</div><div class="l">gastos del periodo</div></div>
+      <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja (ya con gastos descontados)</div></div>
       ${hayComision?`<div class="stat"><div class="n">${fmtMoney(totales.comision)}</div><div class="l">comisión cobradores (${DB.empresa.comisionCobradorPct}%)</div></div>`:''}
     </div>
-    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Neto</th>${hayComision?'<th class="num">Comisión</th>':''}</tr></thead>
-    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.neto)}</td>${hayComision?`<td class="num">${fmtMoney(f.comision)}</td>`:''}</tr>`).join('') : `<tr><td colspan="${hayComision?5:4}"><div class="vacio">No hay rutas.</div></td></tr>`}</tbody>
-    </table></div>
+    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Gastos</th><th class="num">Neto</th>${hayComision?'<th class="num">Comisión</th>':''}</tr></thead>
+    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.gastos)}</td><td class="num">${fmtMoney(f.neto)}</td>${hayComision?`<td class="num">${fmtMoney(f.comision)}</td>`:''}</tr>`).join('') : `<tr><td colspan="${hayComision?6:5}"><div class="vacio">No hay rutas.</div></td></tr>`}
+    ${gastosGenerales>0?`<tr><td>Gastos generales (sin ruta)</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtMoney(gastosGenerales)}</td><td class="num">${fmtMoney(-gastosGenerales)}</td>${hayComision?'<td class="num">—</td>':''}</tr>`:''}
+    </tbody></table></div>
+    <h3 style="margin-top:22px;">Gastos del periodo</h3>
+    ${gastosPeriodo.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Ruta</th><th class="num">Valor</th><th></th></tr></thead><tbody>
+      ${gastosPeriodo.slice().reverse().map(g=>`<tr><td>${fmtDate(g.fecha)}</td><td>${esc(g.descripcion)}</td><td>${g.rutaId?esc(rutaDe(g.rutaId)?.nombre||'—'):'General'}</td><td class="num">${fmtMoney(g.monto)}</td><td>${esAdmin()?`<button class="btn peligro chico" onclick="borrarGasto('${g.id}')">Eliminar</button>`:''}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="vacio">No se han registrado gastos en este periodo.</div>'}
   `;
 }
 
