@@ -522,14 +522,19 @@ function renderInicio(el){
   const idsRuta = misRutas.map(r=>r.id);
   const prestamosVisibles = esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
   const abonosHoy = DB.abonos.filter(a => a.fecha===hoy && (esAdmin() || idsRuta.includes(prestamoDe(a.prestamoId)?.rutaId)));
-  const desembolsosHoy = prestamosVisibles.filter(p=>p.fechaInicio===hoy);
+  const desembolsosHoy = prestamosVisibles.filter(p=>p.fechaInicio===hoy && p.estadoAprobacion!=='pendiente' && p.estadoAprobacion!=='rechazado');
   const recaudadoHoy = abonosHoy.reduce((s,a)=>s+Number(a.monto||0),0);
   const desembolsadoHoy = desembolsosHoy.reduce((s,p)=>s+Number(p.monto||0),0);
   const activos = prestamosVisibles.filter(p=>estadoPrestamo(p)==='activo' || estadoPrestamo(p)==='mora');
   const enMora = prestamosVisibles.filter(p=>estadoPrestamo(p)==='mora');
+  const pendientesAprobacion = prestamosVisibles.filter(p=>p.estadoAprobacion==='pendiente');
 
   el.innerHTML = `
     <div class="encab-vista"><h2>🏠 Hoy — ${fmtDate(hoy)}</h2></div>
+    ${esAdmin() && pendientesAprobacion.length ? `
+    <div class="card fila-clic" style="border:1px solid var(--pend);margin-bottom:14px;" onclick="irVista('prestamos')">
+      <h3 style="color:var(--pend);margin:0;">🔔 ${pendientesAprobacion.length} solicitud${pendientesAprobacion.length===1?'':'es'} de préstamo esperando tu aprobación — toca para revisar</h3>
+    </div>` : ''}
     <div class="grid-stats">
       <div class="stat"><div class="n">${fmtMoney(recaudadoHoy)}</div><div class="l">recaudado hoy</div></div>
       <div class="stat"><div class="n">${fmtMoney(desembolsadoHoy)}</div><div class="l">prestado hoy</div></div>
@@ -939,6 +944,8 @@ function saldoPrestamo(p){
   return Math.max(0, totalAPagar(p) - abonado);
 }
 function estadoPrestamo(p){
+  if(p.estadoAprobacion==='pendiente') return 'pendiente';
+  if(p.estadoAprobacion==='rechazado') return 'rechazado';
   if(p.cancelado) return 'cancelado';
   if(saldoPrestamo(p) <= 0) return 'pagado';
   const hoy = todayStr();
@@ -966,8 +973,16 @@ function usuarioDe(id){ return DB.usuarios.find(u=>u.id===id); }
 function prestamoDe(id){ return DB.prestamos.find(p=>p.id===id); }
 
 function renderPrestamos(el){
+  const pendientes = esAdmin() ? DB.prestamos.filter(p=>p.estadoAprobacion==='pendiente') : [];
   el.innerHTML = `
     <div class="encab-vista"><h2>🧾 Préstamos</h2><button class="btn" onclick="formPrestamo()">+ Nuevo préstamo</button></div>
+    ${pendientes.length ? `
+    <div class="card" style="border:1px solid var(--pend);margin-bottom:14px;">
+      <h3 style="color:var(--pend);margin-top:0;">🔔 ${pendientes.length} solicitud${pendientes.length===1?'':'es'} de préstamo esperando tu aprobación</h3>
+      <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th>Solicitado por</th><th></th></tr></thead><tbody>
+        ${pendientes.map(p=>`<tr><td>${esc(clienteDe(p.clienteId)?.nombre||'—')}</td><td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td><td class="num">${fmtMoney(p.monto)}</td><td>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</td><td><button class="btn secundario chico" onclick="verPrestamo('${p.id}')">Revisar</button></td></tr>`).join('')}
+      </tbody></table></div>
+    </div>` : ''}
     <div class="campo" style="max-width:380px;"><input type="text" id="prestamos-buscar" placeholder="🔎 Buscar por cliente o ruta..." oninput="renderPrestamosTabla()"></div>
     <div id="prestamos-tabla-wrap"></div>
   `;
@@ -982,7 +997,7 @@ function renderPrestamosTabla(){
     <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th class="num">Cuota diaria</th><th class="num">Saldo</th><th>Estado</th></tr></thead>
     <tbody>${lista.length? lista.map(p=>{
       const est = estadoPrestamo(p);
-      const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='cancelado'?'pend':'ok'));
+      const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='cancelado'?'pend':(est==='pendiente'?'pend':(est==='rechazado'?'mora':'ok'))));
       const cliP = clienteDe(p.clienteId);
       return `<tr class="fila-clic" onclick="verPrestamo('${p.id}')">
         <td><div style="display:flex;align-items:center;gap:8px;"><div class="avatar-circulo" style="width:26px;height:26px;font-size:11.5px;">${esc((cliP?.nombre||'?').trim().charAt(0).toUpperCase())}</div>${esc(cliP?.nombre||'—')}</div></td>
@@ -1098,11 +1113,23 @@ function guardarPrestamo(){
   const cliente = clienteDe(clienteId);
   const latVal = document.getElementById('pr-ubic-lat').value, lngVal = document.getElementById('pr-ubic-lng').value;
   const ubicacion = (latVal && lngVal) ? { lat:Number(latVal), lng:Number(lngVal) } : null;
-  const p = { id: uid('prest'), clienteId, rutaId: cliente.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, ubicacion, creadoPor: currentUser.id, cancelado:false };
+  // los cobradores no entregan el dinero directamente: su solicitud queda "pendiente" hasta que
+  // un administrador la apruebe; solo entonces se puede generar el recibo y entregar el efectivo.
+  const requiereAprobacion = !esAdmin();
+  const p = {
+    id: uid('prest'), clienteId, rutaId: cliente.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, ubicacion,
+    creadoPor: currentUser.id, cancelado:false,
+    estadoAprobacion: requiereAprobacion ? 'pendiente' : 'aprobado'
+  };
   DB.prestamos.push(p);
   guardarDB(); cerrarModal();
   refrescarVistaActual();
-  mostrarRecibo(reciboTextoDesembolso(p), cliente);
+  if(requiereAprobacion){
+    toast('Solicitud enviada. Un administrador debe aprobarla antes de entregar el dinero.');
+    verPrestamo(p.id);
+  }else{
+    mostrarRecibo(reciboTextoDesembolso(p), cliente);
+  }
 }
 function verPrestamo(id){
   const p = prestamoDe(id); const c = clienteDe(p.clienteId);
@@ -1134,18 +1161,61 @@ function verPrestamo(id){
       <div class="stat"><div class="n">${fmtMoney(saldoP)}</div><div class="l">saldo</div></div>
       <div class="stat"><div class="n">${p.plazoDias}d</div><div class="l">plazo</div></div>
     </div>
-    <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':'ok')}">${est}</span> ${p.ubicacion?`<a href="${linkGoogleMaps(p.ubicacion.lat,p.ubicacion.lng)}" target="_blank" rel="noopener" style="font-size:13px;">📍 Ver ubicación en Google Maps ↗</a>`:''}</p>
+    <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':(est==='pendiente'?'pend':(est==='rechazado'?'mora':'ok')))}">${est}</span> ${p.ubicacion?`<a href="${linkGoogleMaps(p.ubicacion.lat,p.ubicacion.lng)}" target="_blank" rel="noopener" style="font-size:13px;">📍 Ver ubicación en Google Maps ↗</a>`:''}</p>
+    ${est==='pendiente' ? (esAdmin() ? `
+    <div class="callout-mini" style="background:var(--pend-soft);border:1px solid var(--pend);border-radius:10px;padding:10px 12px;margin:10px 0;">
+      <p style="margin:0 0 8px;font-size:13.5px;">🔔 Esta solicitud de préstamo está esperando tu aprobación. Solicitada por <b>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</b>. El dinero no se ha entregado todavía.</p>
+      <div class="fila"><button class="btn" style="flex:1" onclick="aprobarPrestamo('${p.id}')">✅ Aprobar préstamo</button><button class="btn peligro" style="flex:1" onclick="formRechazarPrestamo('${p.id}')">❌ Rechazar</button></div>
+    </div>` : `
+    <div class="callout-mini" style="background:var(--pend-soft);border:1px solid var(--pend);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px;">
+      ⏳ Esperando aprobación del administrador. Todavía no se le puede entregar el dinero al cliente ni generar el recibo.
+    </div>`) : ''}
+    ${est==='rechazado' ? `
+    <div class="callout-mini" style="background:var(--mora-soft);border:1px solid var(--mora);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px;">
+      ❌ Esta solicitud fue rechazada${p.rechazadoPor?' por '+esc(usuarioDe(p.rechazadoPor)?.nombre||'—'):''}.${p.motivoRechazo?' Motivo: '+esc(p.motivoRechazo):''}
+    </div>` : ''}
     ${p.renovadoDe ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo es una renovación de otro. <a href="#" onclick="verPrestamo('${p.renovadoDe}');return false;">Ver préstamo anterior</a></div>` : ''}
     ${p.renovadoA ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo fue renovado. <a href="#" onclick="verPrestamo('${p.renovadoA}');return false;">Ver préstamo nuevo</a></div>` : ''}
-    ${est!=='pagado' && !p.cancelado ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
+    ${(est==='activo'||est==='mora') ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
+    ${(est==='activo'||est==='mora'||est==='pagado') ? `<button class="btn secundario chico" style="margin-top:8px" onclick="mostrarRecibo(reciboTextoDesembolso(prestamoDe('${p.id}')), clienteDe('${p.clienteId}'))">🧾 Generar recibo del préstamo</button>` : ''}
     ${esAdmin() && est==='mora' ? `<button class="btn secundario chico" style="margin-top:8px" onclick="formRecargoMora('${p.id}')">⚠️ Agregar recargo por mora</button>` : ''}
     ${(p.recargos||[]).length ? `<p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;">Recargos por mora: ${p.recargos.map(r=>fmtMoney(r.monto)+(r.motivo?' ('+esc(r.motivo)+')':'')).join(', ')}</p>` : ''}
     <h4 style="margin-top:16px;">Abonos</h4>
     ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
       ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':''}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="vacio">Sin abonos todavía.</div>'}
-    ${esAdmin() && !p.cancelado ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
+    ${esAdmin() && (est==='activo'||est==='mora') ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
   `);
+}
+function aprobarPrestamo(id){
+  const p = prestamoDe(id);
+  p.estadoAprobacion = 'aprobado';
+  p.aprobadoPor = currentUser.id;
+  p.fechaAprobacion = todayStr();
+  guardarDB(); refrescarVistaActual();
+  toast('Préstamo aprobado. Ya se puede entregar el dinero y generar el recibo.');
+  verPrestamo(id);
+}
+function formRechazarPrestamo(prestamoId){
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>Rechazar solicitud de préstamo</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">El cobrador que la solicitó verá que fue rechazada y, si escribes un motivo, también lo verá.</p>
+    <div class="campo"><label>Motivo (opcional)</label><input type="text" id="rp-motivo" placeholder="Ej: Cliente ya tiene un préstamo activo"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="verPrestamo('${prestamoId}')">Cancelar</button>
+      <button class="btn peligro" onclick="guardarRechazoPrestamo('${prestamoId}')">Rechazar solicitud</button>
+    </div>
+  `);
+}
+function guardarRechazoPrestamo(id){
+  const p = prestamoDe(id);
+  p.estadoAprobacion = 'rechazado';
+  p.rechazadoPor = currentUser.id;
+  p.motivoRechazo = document.getElementById('rp-motivo').value.trim();
+  guardarDB(); refrescarVistaActual();
+  toast('Solicitud de préstamo rechazada.');
+  verPrestamo(id);
 }
 function cancelarPrestamo(id){
   const p = prestamoDe(id); p.cancelado = true;
@@ -1419,7 +1489,7 @@ function renderCuadreTabla(){
   const filasPorRuta = rutasVer.map(r=>{
     const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
     const idsPrestamo = prestamosRuta.map(p=>p.id);
-    const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta).reduce((s,p)=>s+Number(p.monto||0),0);
+    const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta && p.estadoAprobacion!=='pendiente' && p.estadoAprobacion!=='rechazado').reduce((s,p)=>s+Number(p.monto||0),0);
     const recaudado = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
     const comision = Math.round(recaudado * (Number(DB.empresa.comisionCobradorPct||0)/100));
     const gastosRuta = gastosPeriodo.filter(g=>g.rutaId===r.id).reduce((s,g)=>s+Number(g.monto||0),0);
