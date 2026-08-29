@@ -1108,6 +1108,14 @@ function clienteDe(id){ return DB.clientes.find(c=>c.id===id); }
 function rutaDe(id){ return DB.rutas.find(r=>r.id===id); }
 function usuarioDe(id){ return DB.usuarios.find(u=>u.id===id); }
 function prestamoDe(id){ return DB.prestamos.find(p=>p.id===id); }
+/* Si un cobrador pide renovar un préstamo, la renovación queda como una solicitud
+   pendiente (otro préstamo con estadoAprobacion:'pendiente' y renovacionDeId apuntando
+   al préstamo viejo) hasta que el administrador la apruebe. Mientras esté pendiente, el
+   préstamo viejo se bloquea (no se le puede abonar, liquidar ni volver a renovar) para
+   no descuadrar el saldo que quedó "reservado" para la renovación. */
+function renovacionPendienteDe(p){
+  return DB.prestamos.find(x=>x.renovacionDeId===p.id && x.estadoAprobacion==='pendiente');
+}
 
 function renderPrestamos(el){
   const pendientes = esAdmin() ? DB.prestamos.filter(p=>p.estadoAprobacion==='pendiente') : [];
@@ -1117,7 +1125,7 @@ function renderPrestamos(el){
     <div class="card" style="border:1px solid var(--pend);margin-bottom:14px;">
       <h3 style="color:var(--pend);margin-top:0;">🔔 ${pendientes.length} solicitud${pendientes.length===1?'':'es'} de préstamo esperando tu aprobación</h3>
       <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Monto</th><th>Solicitado por</th><th></th></tr></thead><tbody>
-        ${pendientes.map(p=>`<tr><td>${esc(clienteDe(p.clienteId)?.nombre||'—')}</td><td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td><td class="num">${fmtMoney(p.monto)}</td><td>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</td><td><button class="btn secundario chico" onclick="verPrestamo('${p.id}')">Revisar</button></td></tr>`).join('')}
+        ${pendientes.map(p=>`<tr><td>${esc(clienteDe(p.clienteId)?.nombre||'—')}${p.renovacionDeId?' <span class="pill pend">🔄 Renovación</span>':''}</td><td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td><td class="num">${fmtMoney(p.monto)}</td><td>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</td><td><button class="btn secundario chico" onclick="verPrestamo('${p.id}')">Revisar</button></td></tr>`).join('')}
       </tbody></table></div>
     </div>` : ''}
     <div class="campo" style="max-width:380px;"><input type="text" id="prestamos-buscar" placeholder="🔎 Buscar por cliente o ruta..." oninput="renderPrestamosTabla()"></div>
@@ -1311,19 +1319,23 @@ function verPrestamo(id){
     <p><span class="pill ${est==='mora'?'mora':(est==='pagado'?'ok':(est==='pendiente'?'pend':(est==='rechazado'?'mora':'ok')))}">${est}</span> ${p.ubicacion?`<a href="${linkGoogleMaps(p.ubicacion.lat,p.ubicacion.lng)}" target="_blank" rel="noopener" style="font-size:13px;">📍 Ver ubicación en Google Maps ↗</a>`:''}</p>
     ${est==='pendiente' ? (esAdmin() ? `
     <div class="callout-mini" style="background:var(--pend-soft);border:1px solid var(--pend);border-radius:10px;padding:10px 12px;margin:10px 0;">
-      <p style="margin:0 0 8px;font-size:13.5px;">🔔 Esta solicitud de préstamo está esperando tu aprobación. Solicitada por <b>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</b>. El dinero no se ha entregado todavía.</p>
-      <div class="fila"><button class="btn" style="flex:1" onclick="aprobarPrestamo('${p.id}')">✅ Aprobar préstamo</button><button class="btn peligro" style="flex:1" onclick="formRechazarPrestamo('${p.id}')">❌ Rechazar</button></div>
+      <p style="margin:0 0 8px;font-size:13.5px;">🔔 ${p.renovacionDeId?'Esta solicitud de <b>renovación</b> está esperando tu aprobación.':'Esta solicitud de préstamo está esperando tu aprobación.'} Solicitada por <b>${esc(usuarioDe(p.creadoPor)?.nombre||'—')}</b>. ${p.renovacionDeId?'El saldo del préstamo anterior ('+fmtMoney(p.renovacionSaldoDescontado)+') todavía no se ha descontado, ni se ha entregado el efectivo restante.':'El dinero no se ha entregado todavía.'}</p>
+      <div class="fila"><button class="btn" style="flex:1" onclick="aprobarPrestamo('${p.id}')">✅ ${p.renovacionDeId?'Aprobar renovación':'Aprobar préstamo'}</button><button class="btn peligro" style="flex:1" onclick="formRechazarPrestamo('${p.id}')">❌ Rechazar</button></div>
     </div>` : `
     <div class="callout-mini" style="background:var(--pend-soft);border:1px solid var(--pend);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px;">
-      ⏳ Esperando aprobación del administrador. Todavía no se le puede entregar el dinero al cliente ni generar el recibo.
+      ⏳ Esperando aprobación del administrador. ${p.renovacionDeId?'Todavía no se ha descontado el saldo del préstamo anterior ni entregado el efectivo restante.':'Todavía no se le puede entregar el dinero al cliente ni generar el recibo.'}
     </div>`) : ''}
     ${est==='rechazado' ? `
     <div class="callout-mini" style="background:var(--mora-soft);border:1px solid var(--mora);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px;">
-      ❌ Esta solicitud fue rechazada${p.rechazadoPor?' por '+esc(usuarioDe(p.rechazadoPor)?.nombre||'—'):''}.${p.motivoRechazo?' Motivo: '+esc(p.motivoRechazo):''}
+      ❌ Esta solicitud ${p.renovacionDeId?'de renovación':''} fue rechazada${p.rechazadoPor?' por '+esc(usuarioDe(p.rechazadoPor)?.nombre||'—'):''}.${p.motivoRechazo?' Motivo: '+esc(p.motivoRechazo):''}${p.renovacionDeId?' El préstamo anterior sigue activo, sin cambios.':''}
     </div>` : ''}
     ${p.renovadoDe ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo es una renovación de otro. <a href="#" onclick="verPrestamo('${p.renovadoDe}');return false;">Ver préstamo anterior</a></div>` : ''}
     ${p.renovadoA ? `<div class="callout-mini" style="font-size:12.5px;color:var(--ink-soft);margin:6px 0;">🔄 Este préstamo fue renovado. <a href="#" onclick="verPrestamo('${p.renovadoA}');return false;">Ver préstamo nuevo</a></div>` : ''}
-    ${(est==='activo'||est==='mora') ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
+    ${(()=>{ const renovPend = renovacionPendienteDe(p); return renovPend ? `
+    <div class="callout-mini" style="background:var(--pend-soft);border:1px solid var(--pend);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px;">
+      🔄 Hay una solicitud de renovación esperando aprobación del administrador para este préstamo. No se puede abonar, liquidar ni renovar de nuevo hasta que se resuelva. <a href="#" onclick="verPrestamo('${renovPend.id}');return false;">Ver solicitud</a>
+    </div>` : ''; })()}
+    ${(est==='activo'||est==='mora') && !renovacionPendienteDe(p) ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
     ${(est==='activo'||est==='mora'||est==='pagado') ? `<button class="btn secundario chico" style="margin-top:8px" onclick="mostrarRecibo(reciboTextoDesembolso(prestamoDe('${p.id}')), clienteDe('${p.clienteId}'))">🧾 Generar recibo del préstamo</button>` : ''}
     ${esAdmin() && est==='mora' ? `<button class="btn secundario chico" style="margin-top:8px" onclick="formRecargoMora('${p.id}')">⚠️ Agregar recargo por mora</button>` : ''}
     ${(p.recargos||[]).length ? `<p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;">Recargos por mora: ${p.recargos.map(r=>fmtMoney(r.monto)+(r.motivo?' ('+esc(r.motivo)+')':'')).join(', ')}</p>` : ''}
@@ -1339,8 +1351,18 @@ function aprobarPrestamo(id){
   p.estadoAprobacion = 'aprobado';
   p.aprobadoPor = currentUser.id;
   p.fechaAprobacion = todayStr();
+  // si es una solicitud de renovación, al aprobarla recién ahora se descuenta el saldo
+  // del préstamo viejo (con un abono especial "de renovación") y se enlazan los dos.
+  if(p.renovacionDeId){
+    const pViejo = prestamoDe(p.renovacionDeId);
+    if(pViejo){
+      const abonoRenov = { id: uid('abono'), prestamoId: pViejo.id, monto: p.renovacionSaldoDescontado, fecha: p.fechaInicio, cobradorId: p.creadoPor, tipo:'renovacion' };
+      DB.abonos.push(abonoRenov);
+      pViejo.renovadoA = p.id;
+    }
+  }
   guardarDB(); refrescarVistaActual();
-  toast('Préstamo aprobado. Ya se puede entregar el dinero y generar el recibo.');
+  toast(p.renovacionDeId ? 'Renovación aprobada. Ya se puede entregar el efectivo restante y generar el recibo.' : 'Préstamo aprobado. Ya se puede entregar el dinero y generar el recibo.');
   verPrestamo(id);
 }
 function formRechazarPrestamo(prestamoId){
@@ -1361,7 +1383,9 @@ function guardarRechazoPrestamo(id){
   p.rechazadoPor = currentUser.id;
   p.motivoRechazo = document.getElementById('rp-motivo').value.trim();
   guardarDB(); refrescarVistaActual();
-  toast('Solicitud de préstamo rechazada.');
+  // si era una solicitud de renovación, el préstamo viejo NO se toca — sigue tal cual estaba,
+  // sin descontarle nada, porque el descuento solo se aplica cuando se aprueba.
+  toast(p.renovacionDeId ? 'Solicitud de renovación rechazada.' : 'Solicitud de préstamo rechazada.');
   verPrestamo(id);
 }
 function cancelarPrestamo(id){
@@ -1393,6 +1417,7 @@ function guardarRecargoMora(prestamoId){
 }
 function formAbono(prestamoId){
   const p = prestamoDe(prestamoId);
+  if(renovacionPendienteDe(p)){ toast('Este préstamo tiene una renovación esperando aprobación del administrador — no se le puede abonar hasta que se resuelva.'); return; }
   abrirModal(`
     <button class="cerrar" onclick="cerrarModal()">✕</button>
     <h3>Registrar abono</h3>
@@ -1451,16 +1476,19 @@ function renderAbonosTabla(){
     <tbody>${lista.length? lista.map(p=>{
       const c = clienteDe(p.clienteId);
       const est = estadoPrestamo(p);
+      const renovPend = renovacionPendienteDe(p);
       return `<tr>
         <td><a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a></td>
         <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
         <td class="num">${fmtMoney(p.cuotaDiaria)}</td>
         <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
         <td>${est==='mora'?'<span class="pill mora">Mora</span>':'<span class="pill ok">Al día</span>'}</td>
-        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        <td style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          ${renovPend ? `<span class="pill pend">🔄 Renovación pendiente</span><button class="btn secundario chico" onclick="verPrestamo('${renovPend.id}')">Ver solicitud</button>` : `
           <button class="btn chico" onclick="formAbono('${p.id}')">+ Abono</button>
           <button class="btn secundario chico" onclick="formLiquidarPrestamo('${p.id}')">💳 Liquidar</button>
           <button class="btn secundario chico" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button>
+          `}
         </td>
       </tr>`;
     }).join('') : '<tr><td colspan="6"><div class="vacio">No hay préstamos activos para cobrar.</div></td></tr>'}</tbody>
@@ -1494,6 +1522,7 @@ function formLiquidarPrestamo(prestamoId){
   const saldo = saldoPrestamo(p);
   const c = clienteDe(p.clienteId);
   if(saldo<=0){ toast('Este préstamo ya está saldado.'); return; }
+  if(renovacionPendienteDe(p)){ toast('Este préstamo tiene una renovación esperando aprobación del administrador — no se puede liquidar hasta que se resuelva.'); return; }
   abrirModal(`
     <button class="cerrar" onclick="cerrarModal()">✕</button>
     <h3>💳 Liquidar préstamo</h3>
@@ -1522,17 +1551,21 @@ function guardarLiquidacion(prestamoId){
 }
 
 /* ======================================================================
-   RENOVAR PRÉSTAMO: sin esperar a que termine — se descuenta lo que debe
-   del nuevo monto, se le entrega el resto en efectivo, y el préstamo
-   viejo queda saldado (vía un abono especial "de renovación").
+   RENOVAR PRÉSTAMO: si lo hace el administrador, se descuenta el saldo del
+   nuevo monto y se entrega el resto en efectivo de una vez (igual que antes).
+   Si lo hace un cobrador, queda como una SOLICITUD pendiente de aprobación
+   del administrador — el préstamo viejo se bloquea mientras tanto y no se
+   descuenta nada hasta que se apruebe (igual que un préstamo nuevo).
 ====================================================================== */
 function formRenovarPrestamo(prestamoId){
   const p = prestamoDe(prestamoId);
   const saldo = saldoPrestamo(p);
+  if(renovacionPendienteDe(p)){ toast('Este préstamo ya tiene una solicitud de renovación esperando aprobación del administrador.'); return; }
+  const requiereAprobacion = !esAdmin();
   abrirModal(`
     <button class="cerrar" onclick="cerrarModal()">✕</button>
     <h3>Renovar préstamo</h3>
-    <p style="font-size:13.5px;color:var(--ink-soft)">Saldo pendiente del préstamo actual: <b>${fmtMoney(saldo)}</b>. Ese saldo se descuenta del nuevo préstamo; el resto se le entrega en efectivo al cliente.</p>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Saldo pendiente del préstamo actual: <b>${fmtMoney(saldo)}</b>. Ese saldo se descuenta del nuevo préstamo; el resto se le entrega en efectivo al cliente.${requiereAprobacion?' <b>Como cobrador, esta renovación queda como solicitud pendiente hasta que un administrador la apruebe</b> — nada se descuenta ni se entrega todavía.':''}</p>
     <div class="campo"><label>Nuevo monto del préstamo</label><input type="number" id="rn-monto" min="0" step="1000" value="${p.monto}"></div>
     <div class="fila">
       <div class="campo"><label>Interés total (%)</label><input type="number" id="rn-interes" min="0" step="0.5" value="${p.interesPct}"></div>
@@ -1545,7 +1578,7 @@ function formRenovarPrestamo(prestamoId){
     <div class="card" id="rn-resumen" style="margin-top:12px;"></div>
     <div class="acciones-modal">
       <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
-      <button class="btn" id="rn-btn-confirmar" onclick="confirmarRenovacion('${p.id}')">Confirmar renovación</button>
+      <button class="btn" id="rn-btn-confirmar" onclick="confirmarRenovacion('${p.id}')">${requiereAprobacion?'Enviar solicitud de renovación':'Confirmar renovación'}</button>
     </div>
   `);
   const recalc = ()=>{
@@ -1578,10 +1611,27 @@ function confirmarRenovacion(prestamoIdViejo){
   const cuotaDiaria = Number(document.getElementById('rn-cuota').value||0);
   if(!plazoDias || !fechaInicio || !cuotaDiaria){ toast('Completa todos los campos.'); return; }
   if(monto < saldo){ toast('El nuevo monto debe cubrir al menos el saldo pendiente.'); return; }
+  // los cobradores no pueden renovar por su cuenta: la solicitud queda pendiente de
+  // aprobación del administrador, y solo al aprobarla se descuenta el saldo del préstamo
+  // viejo y se entrega el efectivo restante (ver aprobarPrestamo).
+  const requiereAprobacion = !esAdmin();
+  const nuevo = {
+    id: uid('prest'), clienteId: pViejo.clienteId, rutaId: pViejo.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria,
+    ubicacion: pViejo.ubicacion||null, creadoPor: currentUser.id, cancelado:false, renovadoDe: prestamoIdViejo,
+    renovacionDeId: prestamoIdViejo, renovacionSaldoDescontado: saldo,
+    estadoAprobacion: requiereAprobacion ? 'pendiente' : 'aprobado'
+  };
+  DB.prestamos.push(nuevo);
+  if(requiereAprobacion){
+    guardarDB();
+    cerrarModal();
+    refrescarVistaActual();
+    toast('Solicitud de renovación enviada. Un administrador debe aprobarla antes de descontar el saldo y entregar el efectivo.');
+    verPrestamo(nuevo.id);
+    return;
+  }
   const abonoRenov = { id: uid('abono'), prestamoId: prestamoIdViejo, monto: saldo, fecha: fechaInicio, cobradorId: currentUser.id, tipo:'renovacion' };
   DB.abonos.push(abonoRenov);
-  const nuevo = { id: uid('prest'), clienteId: pViejo.clienteId, rutaId: pViejo.rutaId, monto, interesPct, plazoDias, fechaInicio, cuotaDiaria, ubicacion: pViejo.ubicacion||null, creadoPor: currentUser.id, cancelado:false, renovadoDe: prestamoIdViejo };
-  DB.prestamos.push(nuevo);
   pViejo.renovadoA = nuevo.id;
   guardarDB();
   cerrarModal();
