@@ -259,6 +259,7 @@
     <div class="vista" id="vista-clientes"></div>
     <div class="vista" id="vista-prestamos"></div>
     <div class="vista" id="vista-cartera"></div>
+    <div class="vista" id="vista-recordatorios"></div>
     <div class="vista" id="vista-abonos"></div>
     <div class="vista" id="vista-cuadre"></div>
     <div class="vista" id="vista-reportes"></div>
@@ -312,9 +313,10 @@ function inicioMes(fechaStr){ return fechaStr.slice(0,7)+'-01'; }
 /* ---------------------------------------------------------------------
    Estructura por defecto de una empresa nueva
 --------------------------------------------------------------------- */
+const PLANTILLA_RECORDATORIO_DEFECTO = 'Hola {nombre}, te recordamos que tienes un pago pendiente de {saldo} con {empresa} ({dias} día(s) de atraso). Por favor ponte al día con tu cobrador. ¡Gracias!';
 function defaultDB(){
   return {
-    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos', googleMapsApiKey: '', comisionCobradorPct: 0 }, // diasCobro: 'todos' | 'lunSab'
+    empresa: { nombre: 'Mi negocio', pais: 'CO', codigoTel: '57', diasCobro: 'todos', googleMapsApiKey: '', comisionCobradorPct: 0, plantillaRecordatorio: PLANTILLA_RECORDATORIO_DEFECTO }, // diasCobro: 'todos' | 'lunSab'
     usuarios: [
       { id:'u_soporte', usuario:'soporte', claveHash: hashClave('cambiar-esta-clave'), rol:'soporte', nombre:'Soporte Técnico', protegido:true },
       { id:'u_admin_demo', usuario:'admin', claveHash: hashClave('admin123'), rol:'admin', nombre:'Administrador', activo:true }
@@ -347,9 +349,8 @@ function hashClave(clave){
 }
 
 /* ---------------------------------------------------------------------
-   Carga / guardado remoto (por empresa)
+   Carga remota (por empresa)
 --------------------------------------------------------------------- */
-let guardando = false, pendienteGuardar = false;
 async function cargarDB(){
   const res = await fetch('/api/db?empresa='+encodeURIComponent(EMPRESA_SLUG), { cache:'no-store' });
   if(res.status === 404){ const e = new Error('EMPRESA_NO_EXISTE'); e.tipo='EMPRESA_NO_EXISTE'; throw e; }
@@ -358,20 +359,149 @@ async function cargarDB(){
   DB = Object.assign(defaultDB(), datos);
   try{ localStorage.setItem('ertool_cache_'+EMPRESA_SLUG, JSON.stringify(DB)); }catch(e){}
 }
-async function guardarDB(){
+
+/* ---------------------------------------------------------------------
+   GUARDADO CONFIABLE
+   ---------------------------------------------------------------------
+   - Debounce de 600ms: varios cambios seguidos (p.ej. escribir varios
+     campos) se juntan en un solo guardado en vez de mandar uno por letra.
+   - Un solo guardado a la vez ("single-flight"): si ya hay uno en camino,
+     el siguiente se marca como pendiente y sale apenas termine el actual
+     — nunca dos guardados al mismo tiempo pisándose entre sí.
+   - Respaldo local en IndexedDB ANTES de cada intento de red: si el
+     celular se queda sin señal o se cierra la pestaña a mitad de camino,
+     el cambio no se pierde — queda guardado en el propio dispositivo y se
+     ofrece recuperarlo la próxima vez que se abra la app (ver
+     revisarRespaldoLocalPendiente).
+   - Reintento con espera creciente (2s, 4s, 8s, 16s, hasta 30s) si falla
+     la conexión, y reintento automático apenas vuelve el internet.
+   - Aviso al cerrar la pestaña si quedó algo sin confirmar guardado.
+   - Control de versión: si el servidor contesta 409 (alguien más ya
+     guardó cambios más nuevos de esta empresa desde que se cargaron los
+     datos), se detienen los reintentos y se avisa con un mensaje que no
+     se puede ignorar — nunca se sobrescribe en silencio el trabajo de
+     otro cobrador o administrador.
+--------------------------------------------------------------------- */
+let guardadoEnCurso = false, guardadoPendiente = false, intentosGuardadoSeguidos = 0;
+let timerDebounceGuardado = null, hayCambiosSinConfirmar = false, conflictoVersionMostrado = false;
+
+function guardarDB(){
+  if(conflictoVersionMostrado) return; // ya se avisó del conflicto: no se sigue escribiendo hasta recargar
+  hayCambiosSinConfirmar = true;
   try{ localStorage.setItem('ertool_cache_'+EMPRESA_SLUG, JSON.stringify(DB)); }catch(e){}
-  if(guardando){ pendienteGuardar = true; return; }
-  guardando = true;
+  guardarPendienteLocal(DB).catch(()=>{});
+  clearTimeout(timerDebounceGuardado);
+  timerDebounceGuardado = setTimeout(ejecutarGuardado, 600);
+}
+async function ejecutarGuardado(){
+  if(guardadoEnCurso){ guardadoPendiente = true; return; }
+  guardadoEnCurso = true;
   try{
     const res = await fetch('/api/db?empresa='+encodeURIComponent(EMPRESA_SLUG), {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(DB)
     });
-    if(!res.ok) toast('⚠️ No se pudo guardar en el servidor. Tus cambios quedan solo en este dispositivo por ahora.');
+    if(res.status === 409){
+      mostrarConflictoVersion();
+      return; // no se reintenta: hay que recargar para no pisar lo que guardó otra persona
+    }
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json().catch(()=>({}));
+    if(data && typeof data.version === 'number') DB._version = data.version;
+    intentosGuardadoSeguidos = 0;
+    hayCambiosSinConfirmar = false;
+    borrarPendienteLocal().catch(()=>{});
   }catch(e){
-    toast('⚠️ Sin conexión: los cambios se guardaron solo en este dispositivo.');
+    intentosGuardadoSeguidos++;
+    const espera = Math.min(30000, 2000 * Math.pow(2, intentosGuardadoSeguidos-1));
+    toast(intentosGuardadoSeguidos===1 ? '⚠️ Sin conexión: tu cambio quedó guardado en este dispositivo y se reintentará solo.' : '⚠️ Sigue sin haber conexión — reintentando...');
+    setTimeout(ejecutarGuardado, espera);
   }finally{
-    guardando = false;
-    if(pendienteGuardar){ pendienteGuardar = false; guardarDB(); }
+    guardadoEnCurso = false;
+    if(guardadoPendiente && !conflictoVersionMostrado){ guardadoPendiente = false; ejecutarGuardado(); }
+  }
+}
+window.addEventListener('online', ()=>{ if(hayCambiosSinConfirmar && !conflictoVersionMostrado){ intentosGuardadoSeguidos=0; ejecutarGuardado(); } });
+window.addEventListener('beforeunload', (e)=>{
+  if(hayCambiosSinConfirmar){ e.preventDefault(); e.returnValue = ''; return ''; }
+});
+function mostrarConflictoVersion(){
+  conflictoVersionMostrado = true;
+  document.getElementById('modal-host').innerHTML = `
+    <div class="modal-fondo">
+      <div class="modal-wrap"><div class="modal">
+        <h3>⚠️ Alguien más ya guardó cambios</h3>
+        <p style="font-size:13.5px;">Otra persona guardó información de esta empresa desde que se cargó esta pantalla — para no perder ni tu trabajo ni el de la otra persona, no se sobrescribió nada. Recarga la página; si el cambio que acabas de hacer no aparece, vuelve a registrarlo.</p>
+        <div class="acciones-modal"><button class="btn" onclick="location.reload()">Recargar ahora</button></div>
+      </div></div>
+    </div>`;
+}
+
+/* ---- Respaldo local en IndexedDB, independiente de la caché en localStorage ---- */
+function abrirAlmacenLocal(){
+  return new Promise((resolve,reject)=>{
+    if(!window.indexedDB){ reject(new Error('IndexedDB no disponible')); return; }
+    const req = indexedDB.open('ertool_respaldo', 1);
+    req.onupgradeneeded = ()=>{ if(!req.result.objectStoreNames.contains('pendiente')) req.result.createObjectStore('pendiente'); };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+async function guardarPendienteLocal(datos){
+  try{
+    const db = await abrirAlmacenLocal();
+    await new Promise((resolve,reject)=>{
+      const tx = db.transaction('pendiente','readwrite');
+      tx.objectStore('pendiente').put({ datos, guardadoEn: Date.now() }, EMPRESA_SLUG);
+      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
+    });
+  }catch(e){ /* sin IndexedDB (navegador viejo o modo privado): se sigue solo con localStorage */ }
+}
+async function leerPendienteLocal(){
+  try{
+    const db = await abrirAlmacenLocal();
+    return await new Promise((resolve)=>{
+      const tx = db.transaction('pendiente','readonly');
+      const req = tx.objectStore('pendiente').get(EMPRESA_SLUG);
+      req.onsuccess = ()=>resolve(req.result||null);
+      req.onerror = ()=>resolve(null);
+    });
+  }catch(e){ return null; }
+}
+async function borrarPendienteLocal(){
+  try{
+    const db = await abrirAlmacenLocal();
+    await new Promise((resolve)=>{
+      const tx = db.transaction('pendiente','readwrite');
+      tx.objectStore('pendiente').delete(EMPRESA_SLUG);
+      tx.oncomplete = resolve; tx.onerror = resolve;
+    });
+  }catch(e){}
+}
+/* Al entrar, revisa si quedó algún cambio de una sesión anterior que nunca alcanzó a
+   guardarse en el servidor (por ejemplo, se cerró el navegador con el celular sin señal a
+   mitad de una ruta). Si lo encuentra y es más nuevo que lo que el servidor tiene ahora,
+   ofrece recuperarlo — nunca lo borra en silencio sin que el usuario decida. */
+async function revisarRespaldoLocalPendiente(){
+  const pendiente = await leerPendienteLocal();
+  if(!pendiente || !pendiente.datos) return;
+  // Comparación por CONTENIDO (no por número de versión): un respaldo local pendiente puede
+  // quedar con una versión "vieja" tanto porque ya se guardó de verdad (solo faltó borrar el
+  // respaldo) como porque un guardado chocó con el de otra persona y nunca llegó a guardarse
+  // — el número de versión no distingue esos dos casos, pero el contenido sí: si es idéntico a
+  // lo que el servidor tiene ahora, no hay nada que recuperar; si es distinto, sí hay un cambio
+  // real sin guardar y hay que ofrecer recuperarlo, sin importar qué versión traiga.
+  const sinVersion = datos => { const d = Object.assign({}, datos); delete d._version; return JSON.stringify(d); };
+  if(sinVersion(pendiente.datos) === sinVersion(DB)){ borrarPendienteLocal().catch(()=>{}); return; }
+  const recuperar = confirm('Encontramos cambios de una sesión anterior en este dispositivo que no alcanzaron a guardarse en el servidor (por falta de señal, o porque alguien más guardó al mismo tiempo). ¿Quieres recuperarlos ahora?\n\nSi eliges Cancelar, se descartan.');
+  if(recuperar){
+    // Se recupera el CONTENIDO del respaldo, pero se guarda sobre la versión más reciente que
+    // ya se cargó del servidor (no la vieja del respaldo) — así el guardado de recuperación no
+    // choca consigo mismo contra la versión que quedó desactualizada.
+    DB = Object.assign({}, pendiente.datos, { _version: DB._version });
+    toast('Cambios recuperados de este dispositivo. Guardando...');
+    guardarDB();
+  }else{
+    borrarPendienteLocal().catch(()=>{});
   }
 }
 
@@ -418,9 +548,17 @@ async function verificarLicenciaYArrancar(){
     return;
   }
   try{ await cargarDB(); }catch(e){
-    document.getElementById('lic-mensaje').innerHTML = 'No se pudo cargar la información de la empresa.';
-    document.getElementById('pantalla-licencia').classList.remove('hidden');
-    return;
+    // Una empresa recién creada en el panel de soporte puede no tener todavía su archivo de
+    // datos en el backend (aún nadie ha guardado nada) — eso no es un error real, así que se
+    // arranca con una base de datos nueva en blanco en vez de bloquear el primer ingreso.
+    if(e && e.tipo === 'EMPRESA_NO_EXISTE'){
+      DB = defaultDB();
+      try{ localStorage.setItem('ertool_cache_'+EMPRESA_SLUG, JSON.stringify(DB)); }catch(e2){}
+    } else {
+      document.getElementById('lic-mensaje').innerHTML = 'No se pudo cargar la información de la empresa.';
+      document.getElementById('pantalla-licencia').classList.remove('hidden');
+      return;
+    }
   }
   mostrarLogin();
 }
@@ -464,6 +602,7 @@ const PESTANIAS = [
   { id:'inicio', label:'🏠 Inicio', render: renderInicio, ver: ()=>true },
   { id:'prestamos', label:'🧾 Préstamos', render: renderPrestamos, ver: ()=>true },
   { id:'cartera', label:'📋 Cartera', render: renderCartera, ver: ()=>true },
+  { id:'recordatorios', label:'⏰ Recordatorios', render: renderRecordatorios, ver: ()=>true },
   { id:'abonos', label:'💵 Abonos', render: renderAbonos, ver: ()=>true },
   { id:'clientes', label:'📇 Clientes', render: renderClientes, ver: ()=>true },
   { id:'rutas', label:'🚚 Rutas', render: renderRutas, ver: esAdmin },
@@ -482,6 +621,7 @@ function iniciarApp(){
   const nav = document.getElementById('tabs-nav');
   nav.innerHTML = PESTANIAS.filter(p=>p.ver()).map(p=>`<button data-tab="${p.id}" onclick="irVista('${p.id}')">${esc(p.label)}</button>`).join('');
   irVista('inicio');
+  revisarRespaldoLocalPendiente();
 }
 function irVista(id){
   vistaActual = id;
@@ -1080,6 +1220,30 @@ function saldoPrestamo(p){
   const abonado = DB.abonos.filter(a=>a.prestamoId===p.id).reduce((s,a)=>s+Number(a.monto||0),0);
   return Math.max(0, totalAPagar(p) - abonado);
 }
+/* ---------------------------------------------------------------------
+   GANANCIA (utilidad) vs. capital: como la cuota es un total fijo (no hay
+   tabla de amortización que separe capital e interés cuota por cuota), la
+   forma justa y simple de repartir cada abono entre "recuperar el capital
+   prestado" y "ganancia" es en la misma proporción en que el total del
+   préstamo se reparte entre esas dos partes. Así, si un préstamo de
+   $100.000 con 20% de interés que va a pagar $120.000 en total ya lleva
+   $60.000 abonados, se asume que la mitad de esos $60.000 (=$30.000) ya
+   son ganancia realizada — sin inventar una tabla de amortización que
+   esta forma de préstamo (cuota fija diaria) no tiene en realidad.
+--------------------------------------------------------------------- */
+function gananciaTotalPrestamo(p){
+  return Math.max(0, totalAPagar(p) - Number(p.monto||0));
+}
+function proporcionGananciaPrestamo(p){
+  const total = totalAPagar(p);
+  return total>0 ? (gananciaTotalPrestamo(p) / total) : 0;
+}
+function gananciaDelAbono(a){
+  if(a.tipo==='renovacion') return 0; // no es dinero nuevo entrando a caja, es un traslado de saldo del préstamo anterior
+  const p = prestamoDe(a.prestamoId);
+  if(!p) return 0;
+  return Math.round(Number(a.monto||0) * proporcionGananciaPrestamo(p));
+}
 function estadoPrestamo(p){
   if(p.estadoAprobacion==='pendiente') return 'pendiente';
   if(p.estadoAprobacion==='rechazado') return 'rechazado';
@@ -1213,6 +1377,69 @@ function renderCartera(el){
   `;
 }
 
+/* ======================================================================
+   RECORDATORIOS: lista aparte de Cartera, pensada para recorrerla todos
+   los días y mandar el WhatsApp de cobro sin repetirle el mensaje dos
+   veces al mismo cliente el mismo día. wa.me no permite enviar solo —
+   siempre abre WhatsApp con el mensaje ya escrito y es la persona quien
+   le da "Enviar"; por eso "automático" aquí significa que la lista y el
+   mensaje ya están listos, no que salga sin que nadie toque el botón.
+====================================================================== */
+function textoRecordatorio(p){
+  const c = clienteDe(p.clienteId);
+  const plantilla = DB.empresa.plantillaRecordatorio || PLANTILLA_RECORDATORIO_DEFECTO;
+  return plantilla
+    .replace(/\{nombre\}/g, c?.nombre||'')
+    .replace(/\{saldo\}/g, fmtMoney(saldoPrestamo(p)))
+    .replace(/\{dias\}/g, diasAtrasoPrestamo(p))
+    .replace(/\{cuota\}/g, fmtMoney(p.cuotaDiaria))
+    .replace(/\{empresa\}/g, DB.empresa.nombre||'');
+}
+function renderRecordatorios(el){
+  const idsRuta = rutasDelUsuario().map(r=>r.id);
+  const misPrestamos = esAdmin() ? DB.prestamos : DB.prestamos.filter(p=>idsRuta.includes(p.rutaId));
+  const hoy = todayStr();
+  const enMora = misPrestamos.filter(p=>estadoPrestamo(p)==='mora')
+    .map(p=>({ p, c:clienteDe(p.clienteId), dias:diasAtrasoPrestamo(p), yaHoy: p.ultimoRecordatorio===hoy }))
+    .sort((a,b)=> (a.yaHoy - b.yaHoy) || (b.dias - a.dias));
+  const pendientes = enMora.filter(x=>!x.yaHoy).length;
+  el.innerHTML = `
+    <div class="encab-vista"><h2>⏰ Recordatorios de mora</h2></div>
+    <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;margin-top:-6px;">Clientes en mora, del más atrasado al más reciente. Cada botón abre WhatsApp con el mensaje ya escrito — solo falta que tú (o el cliente) le des enviar. ${esAdmin()?'Puedes ajustar el mensaje en <a href="#" onclick="irVista(\'empresa\');return false;">Empresa → Plantilla de recordatorio</a>.':''}</p>
+    <div class="grid-stats">
+      <div class="stat"><div class="n" style="color:${enMora.length?'var(--mora)':'inherit'}">${enMora.length}</div><div class="l">en mora</div></div>
+      <div class="stat"><div class="n" style="color:${pendientes?'var(--pend)':'inherit'}">${pendientes}</div><div class="l">sin recordatorio hoy</div></div>
+      <div class="stat"><div class="n">${enMora.length-pendientes}</div><div class="l">ya recordados hoy</div></div>
+    </div>
+    <div class="tblwrap"><table><thead><tr><th>Cliente</th><th>Ruta</th><th class="num">Días de atraso</th><th class="num">Saldo</th><th>Hoy</th><th></th></tr></thead><tbody>
+      ${enMora.length? enMora.map(({p,c,dias,yaHoy})=>{
+        const tel = (c?.telefono||'').replace(/\D/g,'');
+        return `<tr>
+          <td><a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a></td>
+          <td>${esc(rutaDe(p.rutaId)?.nombre||'—')}</td>
+          <td class="num"><span class="pill mora">${dias} día${dias===1?'':'s'}</span></td>
+          <td class="num">${fmtMoney(saldoPrestamo(p))}</td>
+          <td>${yaHoy?'<span class="pill ok">Enviado</span>':'<span class="pill pend">Pendiente</span>'}</td>
+          <td>${tel?`<button class="btn ${yaHoy?'secundario':''} chico" onclick="enviarRecordatorio('${p.id}')">📲 ${yaHoy?'Reenviar':'Enviar'}</button>`:'<span style="font-size:12px;color:var(--ink-soft)">Sin teléfono</span>'}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="6"><div class="vacio">No hay préstamos en mora. 🎉</div></td></tr>'}
+    </tbody></table></div>
+  `;
+}
+function enviarRecordatorio(prestamoId){
+  const p = prestamoDe(prestamoId);
+  const c = clienteDe(p.clienteId);
+  const tel = (c?.telefono||'').replace(/\D/g,'');
+  if(!tel){ toast('Este cliente no tiene teléfono guardado.'); return; }
+  const codigoPais = DB.empresa.codigoTel||'57';
+  const telCompleto = tel.startsWith(codigoPais) ? tel : codigoPais+tel;
+  const link = 'https://wa.me/'+telCompleto+'?text='+encodeURIComponent(textoRecordatorio(p));
+  p.ultimoRecordatorio = todayStr();
+  guardarDB();
+  window.open(link, '_blank', 'noopener');
+  refrescarVistaActual();
+}
+
 function formPrestamo(){
   const misRutas = rutasDelUsuario();
   const clientesDisponibles = esAdmin() ? DB.clientes : DB.clientes.filter(c=>misRutas.some(r=>r.id===c.rutaId));
@@ -1338,10 +1565,11 @@ function verPrestamo(id){
     ${(est==='activo'||est==='mora') && !renovacionPendienteDe(p) ? `<div class="fila"><button class="btn" style="flex:1" onclick="formAbono('${p.id}')">+ Registrar abono</button><button class="btn secundario" style="flex:1" onclick="formRenovarPrestamo('${p.id}')">🔄 Renovar</button></div>` : ''}
     ${(est==='activo'||est==='mora'||est==='pagado') ? `<button class="btn secundario chico" style="margin-top:8px" onclick="mostrarRecibo(reciboTextoDesembolso(prestamoDe('${p.id}')), clienteDe('${p.clienteId}'))">🧾 Generar recibo del préstamo</button>` : ''}
     ${esAdmin() && est==='mora' ? `<button class="btn secundario chico" style="margin-top:8px" onclick="formRecargoMora('${p.id}')">⚠️ Agregar recargo por mora</button>` : ''}
+    ${esAdmin() && est!=='rechazado' && est!=='cancelado' ? `<button class="btn secundario chico" style="margin-top:8px" onclick="formEditarPrestamo('${p.id}')">✏️ Editar datos del préstamo</button>` : ''}
     ${(p.recargos||[]).length ? `<p style="font-size:12.5px;color:var(--ink-soft);margin-top:8px;">Recargos por mora: ${p.recargos.map(r=>fmtMoney(r.monto)+(r.motivo?' ('+esc(r.motivo)+')':'')).join(', ')}</p>` : ''}
     <h4 style="margin-top:16px;">Abonos</h4>
     ${abonos.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th></th></tr></thead><tbody>
-      ${abonos.map(a=>`<tr><td>${fmtDate(a.fecha)}${a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':(a.tipo==='liquidacion'?' <span class="pill ok">Liquidación</span>':'')}</td><td class="num">${fmtMoney(a.monto)}</td><td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}</td></tr>`).join('')}
+      ${abonos.map(a=>filaAbonoHTML(a, p)).join('')}
     </tbody></table></div>` : '<div class="vacio">Sin abonos todavía.</div>'}
     ${esAdmin() && (est==='activo'||est==='mora') ? `<button class="btn peligro" style="margin-top:14px" onclick="cancelarPrestamo('${p.id}')">Cancelar préstamo</button>` : ''}
   `);
@@ -1389,8 +1617,57 @@ function guardarRechazoPrestamo(id){
   verPrestamo(id);
 }
 function cancelarPrestamo(id){
-  const p = prestamoDe(id); p.cancelado = true;
+  const p = prestamoDe(id);
+  const saldo = saldoPrestamo(p);
+  const advertencia = saldo>0 ? '\n\n⚠️ Este préstamo todavía tiene un saldo pendiente de '+fmtMoney(saldo)+' — al cancelarlo, ese saldo deja de aparecer en cartera. Úsalo solo si el préstamo se anuló de verdad (no para marcar una deuda como incobrable, que debe seguir apareciendo en mora).' : '';
+  if(!confirm('¿Confirmas cancelar este préstamo?'+advertencia)) return;
+  p.cancelado = true;
+  p.fechaCancelacion = todayStr();
+  p.canceladoPor = currentUser.id;
   guardarDB(); cerrarModal(); refrescarVistaActual();
+  toast('Préstamo cancelado.');
+}
+/* Editar los datos de un préstamo ya creado — solo para corregir errores de captura (monto,
+   interés, plazo, cuota, fecha mal digitados), no para cambiar las condiciones de un préstamo
+   ya andando. Bloqueado si hay una renovación pendiente de aprobación, porque esa renovación
+   ya calculó cuánto saldo descontarle a ESTE préstamo con los datos actuales — cambiarlos
+   ahora dejaría ese cálculo desactualizado. */
+function formEditarPrestamo(id){
+  if(!esAdmin()){ toast('Solo un administrador puede editar un préstamo.'); return; }
+  const p = prestamoDe(id);
+  if(renovacionPendienteDe(p)){ toast('Este préstamo tiene una renovación esperando aprobación — no se puede editar hasta que se resuelva.'); return; }
+  const abonado = DB.abonos.filter(a=>a.prestamoId===id).reduce((s,a)=>s+Number(a.monto||0),0);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>✏️ Editar préstamo</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">Úsalo solo para corregir datos mal digitados.${abonado>0?(' Este préstamo ya lleva '+fmtMoney(abonado)+' abonado — si el nuevo total queda por debajo de eso, el préstamo quedará marcado como pagado.'):''}</p>
+    <div class="fila">
+      <div class="campo"><label>Monto prestado</label><input type="number" id="ep-monto" min="0" step="1000" value="${p.monto}"></div>
+      <div class="campo"><label>Interés total (%)</label><input type="number" id="ep-interes" min="0" step="0.5" value="${p.interesPct}"></div>
+    </div>
+    <div class="fila">
+      <div class="campo"><label>Plazo (días)</label><input type="number" id="ep-plazo" min="1" step="1" value="${p.plazoDias}"></div>
+      <div class="campo"><label>Fecha de inicio</label><input type="date" id="ep-fecha" value="${p.fechaInicio}"></div>
+    </div>
+    <div class="campo"><label>Cuota diaria</label><input type="number" id="ep-cuota" min="0" step="500" value="${p.cuotaDiaria}"></div>
+    <div class="acciones-modal">
+      <button class="btn secundario" onclick="verPrestamo('${id}')">Cancelar</button>
+      <button class="btn" onclick="guardarEdicionPrestamo('${id}')">Guardar cambios</button>
+    </div>
+  `);
+}
+function guardarEdicionPrestamo(id){
+  const p = prestamoDe(id);
+  const monto = Number(document.getElementById('ep-monto').value||0);
+  const interesPct = Number(document.getElementById('ep-interes').value||0);
+  const plazoDias = Number(document.getElementById('ep-plazo').value||0);
+  const fechaInicio = document.getElementById('ep-fecha').value;
+  const cuotaDiaria = Number(document.getElementById('ep-cuota').value||0);
+  if(!monto || !plazoDias || !fechaInicio || !cuotaDiaria){ toast('Completa todos los campos.'); return; }
+  Object.assign(p, { monto, interesPct, plazoDias, fechaInicio, cuotaDiaria });
+  guardarDB();
+  toast('Préstamo actualizado.');
+  verPrestamo(id);
 }
 function formRecargoMora(prestamoId){
   abrirModal(`
@@ -1440,6 +1717,70 @@ function guardarAbono(prestamoId){
   const p = prestamoDe(prestamoId);
   refrescarVistaActual();
   mostrarRecibo(reciboTextoAbono(a), clienteDe(p.clienteId));
+}
+
+/* Fila de un abono dentro del detalle de un préstamo (verPrestamo): muestra el botón de
+   recibo de siempre y, solo para administradores, un botón de editar/eliminar — para poder
+   corregir un monto o una fecha mal digitados sin dejar la caja descuadrada. Se deja fuera
+   a los abonos de tipo 'renovacion' porque están enlazados al préstamo anterior y tocarlos
+   ahí dejaría el saldo de los dos préstamos descuadrado; los de 'liquidacion' sí se pueden
+   editar/eliminar porque son solo un abono grande sin ningún otro registro que dependa de él. */
+function filaAbonoHTML(a, p){
+  const pillTipo = a.tipo==='renovacion'?' <span class="pill pend">Renovación</span>':(a.tipo==='liquidacion'?' <span class="pill ok">Liquidación</span>':'');
+  const puedeTocar = a.tipo!=='renovacion';
+  return `<tr>
+    <td>${fmtDate(a.fecha)}${pillTipo}</td>
+    <td class="num">${fmtMoney(a.monto)}</td>
+    <td style="display:flex;gap:6px;flex-wrap:wrap;">
+      ${puedeTocar?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p.clienteId}'))">Recibo</button>`:''}
+      ${esAdmin() && puedeTocar?`<button class="btn secundario chico" onclick="formEditarAbono('${a.id}')">✏️ Editar</button>`:''}
+    </td>
+  </tr>`;
+}
+/* Solo administradores pueden editar o eliminar un abono ya registrado — así un cobrador no
+   puede borrar en el camino un abono que ya cobró en efectivo. Si el cobrador se equivocó,
+   debe avisarle al administrador para que lo corrija. */
+function formEditarAbono(id){
+  if(!esAdmin()){ toast('Solo un administrador puede editar o eliminar un abono.'); return; }
+  const a = DB.abonos.find(x=>x.id===id);
+  if(!a) return;
+  if(a.tipo==='renovacion'){ toast('Este movimiento está enlazado a una renovación y no se puede editar directamente.'); return; }
+  const p = prestamoDe(a.prestamoId);
+  abrirModal(`
+    <button class="cerrar" onclick="cerrarModal()">✕</button>
+    <h3>✏️ Editar abono</h3>
+    <p style="font-size:13px;color:var(--ink-soft)">${esc(clienteDe(p?.clienteId)?.nombre||'')}${a.tipo==='liquidacion'?' · Este abono viene de una liquidación total del préstamo.':''}</p>
+    <div class="campo"><label>Monto</label><input type="number" id="ea-monto" min="0" step="500" value="${a.monto}"></div>
+    <div class="campo"><label>Fecha</label><input type="date" id="ea-fecha" value="${a.fecha}"></div>
+    <div class="acciones-modal">
+      <button class="btn peligro" onclick="eliminarAbono('${a.id}')">Eliminar abono</button>
+      <button class="btn secundario" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarEdicionAbono('${a.id}')">Guardar cambios</button>
+    </div>
+  `);
+}
+function guardarEdicionAbono(id){
+  const a = DB.abonos.find(x=>x.id===id);
+  if(!a) return;
+  const monto = Number(document.getElementById('ea-monto').value||0);
+  const fecha = document.getElementById('ea-fecha').value;
+  if(!monto || !fecha){ toast('Completa monto y fecha.'); return; }
+  a.monto = monto; a.fecha = fecha;
+  guardarDB();
+  toast('Abono actualizado.');
+  const prestamoId = a.prestamoId;
+  if(prestamoDe(prestamoId)) verPrestamo(prestamoId); else { cerrarModal(); refrescarVistaActual(); }
+}
+function eliminarAbono(id){
+  const a = DB.abonos.find(x=>x.id===id);
+  if(!a) return;
+  if(a.tipo==='renovacion'){ toast('Este movimiento está enlazado a una renovación y no se puede eliminar directamente.'); return; }
+  if(!confirm('¿Eliminar este abono de '+fmtMoney(a.monto)+' del '+fmtDate(a.fecha)+'? El saldo pendiente del préstamo volverá a subir.')) return;
+  const prestamoId = a.prestamoId;
+  DB.abonos = DB.abonos.filter(x=>x.id!==id);
+  guardarDB();
+  toast('Abono eliminado.');
+  if(prestamoDe(prestamoId)) verPrestamo(prestamoId); else { cerrarModal(); refrescarVistaActual(); }
 }
 
 /* ======================================================================
@@ -1511,7 +1852,10 @@ function renderAbonosRecientes(){
         <td class="num">${fmtMoney(a.monto)}</td>
         <td>${pillTipo}</td>
         <td>${esc(usuarioDe(a.cobradorId)?.nombre||'—')}</td>
-        <td>${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p?.clienteId}'))">Recibo</button>`:''}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="mostrarRecibo(reciboTextoAbono(DB.abonos.find(x=>x.id==='${a.id}')), clienteDe('${p?.clienteId}'))">Recibo</button>`:''}
+          ${esAdmin() && a.tipo!=='renovacion'?`<button class="btn secundario chico" onclick="formEditarAbono('${a.id}')">✏️</button>`:''}
+        </td>
       </tr>`;
     }).join('') : '<tr><td colspan="7"><div class="vacio">Todavía no se han registrado abonos.</div></td></tr>'}</tbody>
     </table></div>
@@ -1791,16 +2135,19 @@ function renderCuadreTabla(){
     const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
     const idsPrestamo = prestamosRuta.map(p=>p.id);
     const desembolsado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta && p.estadoAprobacion!=='pendiente' && p.estadoAprobacion!=='rechazado').reduce((s,p)=>s+Number(p.monto||0),0);
-    const recaudado = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
+    const abonosRuta = DB.abonos.filter(a=>idsPrestamo.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta);
+    const recaudado = abonosRuta.reduce((s,a)=>s+Number(a.monto||0),0);
+    const ganancia = abonosRuta.reduce((s,a)=>s+gananciaDelAbono(a),0);
     const comision = Math.round(recaudado * (Number(DB.empresa.comisionCobradorPct||0)/100));
     const gastosRuta = gastosPeriodo.filter(g=>g.rutaId===r.id).reduce((s,g)=>s+Number(g.monto||0),0);
-    return { nombre:r.nombre, desembolsado, recaudado, gastos:gastosRuta, neto: recaudado-desembolsado-gastosRuta, comision };
+    return { nombre:r.nombre, desembolsado, recaudado, ganancia, gastos:gastosRuta, neto: recaudado-desembolsado-gastosRuta, comision };
   });
   const gastosGenerales = gastosPeriodo.filter(g=>!g.rutaId).reduce((s,g)=>s+Number(g.monto||0),0);
   const totalGastos = gastosPeriodo.reduce((s,g)=>s+Number(g.monto||0),0);
-  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, comision:acc.comision+f.comision}), {desembolsado:0,recaudado:0,comision:0});
+  const totales = filasPorRuta.reduce((acc,f)=>({desembolsado:acc.desembolsado+f.desembolsado, recaudado:acc.recaudado+f.recaudado, ganancia:acc.ganancia+f.ganancia, comision:acc.comision+f.comision}), {desembolsado:0,recaudado:0,ganancia:0,comision:0});
   totales.gastos = totalGastos;
   totales.neto = totales.recaudado - totales.desembolsado - totales.gastos;
+  totales.utilidadNeta = totales.ganancia - totales.gastos - totales.comision;
   const hayComision = Number(DB.empresa.comisionCobradorPct||0) > 0;
 
   document.getElementById('cuadre-contenido').innerHTML = `
@@ -1808,12 +2155,15 @@ function renderCuadreTabla(){
       <div class="stat"><div class="n">${fmtMoney(totales.recaudado)}</div><div class="l">recaudado (${fmtDate(desde)} – ${fmtDate(hasta)})</div></div>
       <div class="stat"><div class="n">${fmtMoney(totales.desembolsado)}</div><div class="l">prestado en el periodo</div></div>
       <div class="stat"><div class="n" style="color:${totales.gastos>0?'var(--mora)':'inherit'}">${fmtMoney(totales.gastos)}</div><div class="l">gastos del periodo</div></div>
-      <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja (ya con gastos descontados)</div></div>
+      <div class="stat"><div class="n" style="color:${totales.neto<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.neto)}</div><div class="l">neto en caja (movimiento de efectivo)</div></div>
+      <div class="stat"><div class="n">${fmtMoney(totales.ganancia)}</div><div class="l">ganancia por intereses cobrada</div></div>
+      <div class="stat"><div class="n" style="color:${totales.utilidadNeta<0?'var(--mora)':'var(--ok)'}">${fmtMoney(totales.utilidadNeta)}</div><div class="l">utilidad neta (interés − gastos${hayComision?' − comisión':''})</div></div>
       ${hayComision?`<div class="stat"><div class="n">${fmtMoney(totales.comision)}</div><div class="l">comisión cobradores (${DB.empresa.comisionCobradorPct}%)</div></div>`:''}
     </div>
-    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Gastos</th><th class="num">Neto</th>${hayComision?'<th class="num">Comisión</th>':''}</tr></thead>
-    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.gastos)}</td><td class="num">${fmtMoney(f.neto)}</td>${hayComision?`<td class="num">${fmtMoney(f.comision)}</td>`:''}</tr>`).join('') : `<tr><td colspan="${hayComision?6:5}"><div class="vacio">No hay rutas.</div></td></tr>`}
-    ${gastosGenerales>0?`<tr><td>Gastos generales (sin ruta)</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtMoney(gastosGenerales)}</td><td class="num">${fmtMoney(-gastosGenerales)}</td>${hayComision?'<td class="num">—</td>':''}</tr>`:''}
+    <p style="font-size:12px;color:var(--ink-soft);max-width:64ch;margin-top:-6px;">"Neto en caja" es cuánto efectivo entró o salió en el periodo (incluye capital prestado y recuperado). "Ganancia por intereses" y "Utilidad neta" muestran solo lo que de verdad es ganancia del negocio, sin contar el capital que simplemente vuelve.</p>
+    <div class="tblwrap"><table><thead><tr><th>Ruta</th><th class="num">Recaudado</th><th class="num">Prestado</th><th class="num">Ganancia</th><th class="num">Gastos</th><th class="num">Neto</th>${hayComision?'<th class="num">Comisión</th>':''}</tr></thead>
+    <tbody>${filasPorRuta.length? filasPorRuta.map(f=>`<tr><td>${esc(f.nombre)}</td><td class="num">${fmtMoney(f.recaudado)}</td><td class="num">${fmtMoney(f.desembolsado)}</td><td class="num">${fmtMoney(f.ganancia)}</td><td class="num">${fmtMoney(f.gastos)}</td><td class="num">${fmtMoney(f.neto)}</td>${hayComision?`<td class="num">${fmtMoney(f.comision)}</td>`:''}</tr>`).join('') : `<tr><td colspan="${hayComision?7:6}"><div class="vacio">No hay rutas.</div></td></tr>`}
+    ${gastosGenerales>0?`<tr><td>Gastos generales (sin ruta)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtMoney(gastosGenerales)}</td><td class="num">${fmtMoney(-gastosGenerales)}</td>${hayComision?'<td class="num">—</td>':''}</tr>`:''}
     </tbody></table></div>
     <h3 style="margin-top:22px;">Gastos del periodo</h3>
     ${gastosPeriodo.length? `<div class="tblwrap"><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Ruta</th><th class="num">Valor</th><th></th></tr></thead><tbody>
@@ -1936,16 +2286,16 @@ function reportePrestamos(){
   if(hasta) lista = lista.filter(p=>p.fechaInicio<=hasta);
   if(estadoF) lista = lista.filter(p=>estadoPrestamo(p)===estadoF);
   lista.sort((a,b)=> a.fechaInicio<b.fechaInicio?1:(a.fechaInicio>b.fechaInicio?-1:0));
-  const encabezados = ['Fecha','Cliente','Cédula','Ruta','Monto','Total a pagar','Saldo','Estado','Solicitado por'];
+  const encabezados = ['Fecha','Cliente','Cédula','Ruta','Monto','Total a pagar','Ganancia esperada','Saldo','Estado','Solicitado por'];
   const filasCSV = lista.map(p=>{
     const c = clienteDe(p.clienteId);
-    return [p.fechaInicio, c?.nombre||'', c?.cedula||'', rutaDe(p.rutaId)?.nombre||'', p.monto, totalAPagar(p), saldoPrestamo(p), estadoPrestamo(p), usuarioDe(p.creadoPor)?.nombre||''];
+    return [p.fechaInicio, c?.nombre||'', c?.cedula||'', rutaDe(p.rutaId)?.nombre||'', p.monto, totalAPagar(p), gananciaTotalPrestamo(p), saldoPrestamo(p), estadoPrestamo(p), usuarioDe(p.creadoPor)?.nombre||''];
   });
   const filasHtml = lista.map(p=>{
     const c = clienteDe(p.clienteId);
     const est = estadoPrestamo(p);
     const pillClass = est==='mora'?'mora':(est==='pagado'?'ok':(est==='pendiente'?'pend':(est==='rechazado'?'mora':(est==='cancelado'?'pend':'ok'))));
-    return [fmtDate(p.fechaInicio), `<a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a>`, esc(c?.cedula||'—'), esc(rutaDe(p.rutaId)?.nombre||'—'), fmtMoney(p.monto), fmtMoney(totalAPagar(p)), fmtMoney(saldoPrestamo(p)), `<span class="pill ${pillClass}">${est}</span>`, esc(usuarioDe(p.creadoPor)?.nombre||'—')];
+    return [fmtDate(p.fechaInicio), `<a href="#" onclick="verPrestamo('${p.id}');return false;">${esc(c?.nombre||'—')}</a>`, esc(c?.cedula||'—'), esc(rutaDe(p.rutaId)?.nombre||'—'), fmtMoney(p.monto), fmtMoney(totalAPagar(p)), fmtMoney(gananciaTotalPrestamo(p)), fmtMoney(saldoPrestamo(p)), `<span class="pill ${pillClass}">${est}</span>`, esc(usuarioDe(p.creadoPor)?.nombre||'—')];
   });
   pintarReporte('Préstamos', encabezados, filasHtml, filasCSV);
 }
@@ -2015,16 +2365,18 @@ function reporteRendimiento(){
     const prestamosRuta = DB.prestamos.filter(p=>p.rutaId===r.id);
     const idsP = prestamosRuta.map(p=>p.id);
     const prestado = prestamosRuta.filter(p=>p.fechaInicio>=desde && p.fechaInicio<=hasta && p.estadoAprobacion!=='pendiente' && p.estadoAprobacion!=='rechazado').reduce((s,p)=>s+Number(p.monto||0),0);
-    const recaudado = DB.abonos.filter(a=>idsP.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta).reduce((s,a)=>s+Number(a.monto||0),0);
+    const abonosRuta = DB.abonos.filter(a=>idsP.includes(a.prestamoId) && a.fecha>=desde && a.fecha<=hasta);
+    const recaudado = abonosRuta.reduce((s,a)=>s+Number(a.monto||0),0);
+    const ganancia = abonosRuta.reduce((s,a)=>s+gananciaDelAbono(a),0);
     const gastosRuta = (DB.gastos||[]).filter(g=>g.rutaId===r.id && g.fecha>=desde && g.fecha<=hasta).reduce((s,g)=>s+Number(g.monto||0),0);
     const activos = prestamosRuta.filter(p=>{ const e=estadoPrestamo(p); return e==='activo'||e==='mora'; });
     const enMora = activos.filter(p=>estadoPrestamo(p)==='mora');
     const carteraActiva = activos.reduce((s,p)=>s+saldoPrestamo(p),0);
-    return { nombre:r.nombre, prestado, recaudado, gastos:gastosRuta, neto:recaudado-prestado-gastosRuta, activos:activos.length, enMora:enMora.length, carteraActiva };
+    return { nombre:r.nombre, prestado, recaudado, ganancia, gastos:gastosRuta, neto:recaudado-prestado-gastosRuta, utilidadNeta: ganancia-gastosRuta, activos:activos.length, enMora:enMora.length, carteraActiva };
   });
-  const encabezados = ['Ruta','Prestado','Recaudado','Gastos','Neto','Préstamos activos','En mora','Cartera activa'];
-  const filasCSV = filas.map(f=>[f.nombre, f.prestado, f.recaudado, f.gastos, f.neto, f.activos, f.enMora, f.carteraActiva]);
-  const filasHtml = filas.map(f=>[esc(f.nombre), fmtMoney(f.prestado), fmtMoney(f.recaudado), fmtMoney(f.gastos), fmtMoney(f.neto), f.activos, f.enMora>0?`<span class="pill mora">${f.enMora}</span>`:'0', fmtMoney(f.carteraActiva)]);
+  const encabezados = ['Ruta','Prestado','Recaudado','Ganancia por intereses','Gastos','Utilidad neta','Neto en caja','Préstamos activos','En mora','Cartera activa'];
+  const filasCSV = filas.map(f=>[f.nombre, f.prestado, f.recaudado, f.ganancia, f.gastos, f.utilidadNeta, f.neto, f.activos, f.enMora, f.carteraActiva]);
+  const filasHtml = filas.map(f=>[esc(f.nombre), fmtMoney(f.prestado), fmtMoney(f.recaudado), fmtMoney(f.ganancia), fmtMoney(f.gastos), fmtMoney(f.utilidadNeta), fmtMoney(f.neto), f.activos, f.enMora>0?`<span class="pill mora">${f.enMora}</span>`:'0', fmtMoney(f.carteraActiva)]);
   pintarReporte('Rendimiento por ruta', encabezados, filasHtml, filasCSV);
 }
 
@@ -2117,6 +2469,17 @@ function renderEmpresaConfig(el){
       <button class="btn" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar</button>
     </div>
 
+    <h3 style="margin-top:30px;">⏰ Mensaje de recordatorio</h3>
+    <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;">
+      Este es el mensaje que se arma automáticamente en la pestaña Recordatorios para cada
+      cliente en mora. Puedes usar <code>{nombre}</code>, <code>{saldo}</code>, <code>{dias}</code>,
+      <code>{cuota}</code> y <code>{empresa}</code> — se reemplazan solos por los datos de cada préstamo.
+    </p>
+    <div class="card" style="max-width:520px;">
+      <div class="campo"><label>Plantilla del mensaje</label><textarea id="em-plantilla" rows="4">${esc(e.plantillaRecordatorio||PLANTILLA_RECORDATORIO_DEFECTO)}</textarea></div>
+      <button class="btn secundario" style="margin-top:10px" onclick="guardarEmpresaConfig()">Guardar plantilla</button>
+    </div>
+
     <h3 style="margin-top:30px;">📍 Google Maps (opcional)</h3>
     <p style="font-size:13px;color:var(--ink-soft);max-width:64ch;">
       Sin esta clave, ER TOOL igual puede guardar la ubicación GPS del celular al crear un cliente o
@@ -2150,6 +2513,7 @@ function guardarEmpresaConfig(){
   DB.empresa.codigoTel = document.getElementById('em-codigotel').value.trim() || '57';
   DB.empresa.diasCobro = document.getElementById('em-diascobro').value;
   DB.empresa.comisionCobradorPct = Number(document.getElementById('em-comision').value||0);
+  DB.empresa.plantillaRecordatorio = document.getElementById('em-plantilla').value.trim() || PLANTILLA_RECORDATORIO_DEFECTO;
   DB.empresa.googleMapsApiKey = document.getElementById('em-mapskey').value.trim();
   guardarDB();
   document.getElementById('topbar-empresa').textContent = DB.empresa.nombre;

@@ -96,28 +96,77 @@ app.get('/api/licencia', (req, res) => {
   res.json({ nombre: e.nombre, activa: empresaActiva(e), vence: e.vence, permanente: e.permanente });
 });
 
-/* ---------------- Datos de cada empresa ---------------- */
+/* ---------------- Datos de cada empresa ----------------
+   Escritura ATÓMICA con respaldo: primero se escribe en un archivo temporal,
+   luego se copia el archivo actual (si existe) a ".bak", y solo al final se
+   renombra el temporal al nombre real — así, si el proceso se cae justo en
+   medio de un guardado, nunca queda un archivo a medio escribir. Si al leer
+   el archivo principal resulta que quedó corrupto de todas formas, se cae
+   automáticamente al ".bak" antes de rendirse.
+
+   Control de versión (para que dos cobradores guardando casi al mismo
+   tiempo no se pisen el trabajo uno al otro): cada empresa guarda un
+   contador "_version" dentro de su propio JSON. El cliente manda la
+   versión con la que cargó los datos; si alguien más ya guardó una versión
+   más nueva mientras tanto, se rechaza el guardado con 409 en vez de
+   sobrescribir en silencio lo que el otro acaba de guardar. Datos viejos
+   sin "_version" (de antes de este cambio) se dejan pasar una vez, para
+   no bloquear empresas que ya tenían información. */
 function archivoEmpresa(slug) { return path.join(EMPRESAS_DIR, slug + '.json'); }
+function leerDatosEmpresaConRespaldo(slug) {
+  const archivo = archivoEmpresa(slug);
+  if (!fs.existsSync(archivo)) return null; // empresa registrada pero sin datos guardados todavía
+  try {
+    return JSON.parse(fs.readFileSync(archivo, 'utf-8'));
+  } catch (e) {
+    const bak = archivo + '.bak';
+    if (fs.existsSync(bak)) {
+      try { return JSON.parse(fs.readFileSync(bak, 'utf-8')); } catch (e2) { /* el respaldo también está corrupto */ }
+    }
+    throw e;
+  }
+}
+function guardarDatosEmpresaAtomico(slug, datos) {
+  const archivo = archivoEmpresa(slug);
+  const tmp = archivo + '.tmp-' + process.pid + '-' + Date.now();
+  fs.writeFileSync(tmp, JSON.stringify(datos));
+  if (fs.existsSync(archivo)) {
+    try { fs.copyFileSync(archivo, archivo + '.bak'); } catch (e) { /* si falla la copia de respaldo, se sigue igual con el guardado */ }
+  }
+  fs.renameSync(tmp, archivo);
+}
 
 app.get('/api/db', (req, res) => {
   const slug = req.query.empresa;
   const e = leerRegistro().find(x => x.slug === slug);
   if (!e) return res.status(404).json({ error: 'Empresa no encontrada. Pide a soporte que la cree.' });
-  const archivo = archivoEmpresa(slug);
-  if (!fs.existsSync(archivo)) return res.json({}); // el front completa con su defaultDB()
   try {
-    res.json(JSON.parse(fs.readFileSync(archivo, 'utf-8')));
+    const datos = leerDatosEmpresaConRespaldo(slug);
+    res.json(datos || {}); // sin datos todavía: el front completa con su defaultDB()
   } catch (e2) {
-    res.status(500).json({ error: 'No se pudo leer la información de la empresa.' });
+    res.status(500).json({ error: 'No se pudo leer la información de la empresa (archivo dañado, y el respaldo también).' });
   }
 });
 app.post('/api/db', (req, res) => {
   const slug = req.query.empresa;
   const e = leerRegistro().find(x => x.slug === slug);
   if (!e) return res.status(404).json({ error: 'Empresa no encontrada.' });
+  let actual;
   try {
-    fs.writeFileSync(archivoEmpresa(slug), JSON.stringify(req.body));
-    res.json({ ok: true });
+    actual = leerDatosEmpresaConRespaldo(slug);
+  } catch (e2) {
+    return res.status(500).json({ error: 'No se pudo verificar la información actual antes de guardar.' });
+  }
+  const versionActual = (actual && typeof actual._version === 'number') ? actual._version : 0;
+  const versionCliente = (req.body && typeof req.body._version === 'number') ? req.body._version : null;
+  if (versionActual > 0 && versionCliente !== null && versionCliente < versionActual) {
+    return res.status(409).json({ error: 'CONFLICTO_VERSION', mensaje: 'Alguien más ya guardó cambios más nuevos de esta empresa.', versionActual });
+  }
+  const nuevaVersion = versionActual + 1;
+  const datosAGuardar = Object.assign({}, req.body, { _version: nuevaVersion });
+  try {
+    guardarDatosEmpresaAtomico(slug, datosAGuardar);
+    res.json({ ok: true, version: nuevaVersion });
   } catch (e2) {
     res.status(500).json({ error: 'No se pudo guardar.' });
   }
